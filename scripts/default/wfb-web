@@ -1,0 +1,5 @@
+WFB_WEB_ADDR=:8080
+WFB_WEB_CFG=/etc/wifibroadcast.cfg
+WFB_WEB_DEFAULT=/etc/default/wifibroadcast
+WFB_WEB_MASTER_CFG=
+WFB_WEB_STATS_ADDR=127.0.0.1:8103

@@ -1,0 +1,13 @@
+[Unit]
+Description=WFB-ng web sidecar
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/wfb-web
+ExecStart=/usr/bin/wfb-web
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
