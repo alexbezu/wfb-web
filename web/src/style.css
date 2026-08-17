@@ -34,6 +34,24 @@ body {
   margin: 0 0 24px;
 }
 
+.profile-box {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+  color: #dce7f2;
+}
+
+.profile-box span,
+.profile-box small {
+  color: #aab7c4;
+}
+
+.profile-box select {
+  background: #101820;
+  border-color: #405163;
+  color: #f8fafc;
+}
+
 .status-dot {
   display: inline-block;
   width: 9px;
@@ -86,6 +104,10 @@ select {
   border: 1px solid #c8d1da;
   border-radius: 6px;
   background: #fff;
+}
+
+input[type="file"] {
+  display: none;
 }
 
 button {

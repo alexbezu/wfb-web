@@ -16,9 +16,11 @@ type State struct {
 }
 
 var units = map[string]string{
-	"wifibroadcast-gs": "wifibroadcast@gs",
-	"rtsp-h265":        "rtsp@h265",
-	"rtsp-h264":        "rtsp@h264",
+	"wifibroadcast-gs":    "wifibroadcast@gs",
+	"wifibroadcast-drone": "wifibroadcast@drone",
+	"rtsp-h265":           "rtsp@h265",
+	"rtsp-h264":           "rtsp@h264",
+	"fpv-camera":          "fpv-camera.service",
 }
 
 func AllowedUnit(name string) (string, bool) {

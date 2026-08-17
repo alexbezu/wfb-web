@@ -26,11 +26,26 @@ type ServiceState = {
   sub: string;
 };
 
+type ProfileSelection = {
+  profile: string;
+  source: string;
+  options: Array<{ profile: string; label: string; api_addr: string }>;
+};
+
 type RadioInfo = {
   name: string;
   ethtool: string;
   iw: string;
   error?: string;
+};
+
+type KeyInfo = {
+  profile: string;
+  path: string;
+  exists: boolean;
+  size: number;
+  hash: string;
+  mod_time: string;
 };
 
 type WFBSettingsEvent = {
@@ -83,14 +98,17 @@ const app = root;
 
 let config: Config | null = null;
 let effectiveConfig: EffectiveConfig | null = null;
+let profileSelection: ProfileSelection | null = null;
 let services: ServiceState[] = [];
 let radios: RadioInfo[] = [];
+let keyInfo: KeyInfo | null = null;
 let settingsEvent: WFBSettingsEvent | null = null;
 let rxEvent: WFBStatsEvent | null = null;
 let txEvent: WFBStatsEvent | null = null;
 let statsConnected = false;
 let error = "";
 let activeTab = "stats";
+let statsSource: EventSource | null = null;
 
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -105,13 +123,50 @@ async function load(): Promise<void> {
   try {
     config = await requestJSON<Config>("/api/config");
     effectiveConfig = await requestJSON<EffectiveConfig>("/api/config/effective");
+    profileSelection = await requestJSON<ProfileSelection>("/api/profile");
     services = await requestJSON<ServiceState[]>("/api/services");
     radios = await requestJSON<RadioInfo[]>("/api/radio");
+    keyInfo = await requestJSON<KeyInfo>("/api/key");
     error = "";
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
   render();
+}
+
+async function selectProfile(profile: string): Promise<void> {
+  try {
+    profileSelection = await requestJSON<ProfileSelection>("/api/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile })
+    });
+    settingsEvent = null;
+    rxEvent = null;
+    txEvent = null;
+    keyInfo = await requestJSON<KeyInfo>("/api/key");
+    statsConnected = false;
+    streamStats();
+    render();
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    render();
+  }
+}
+
+async function uploadKey(file: File): Promise<void> {
+  try {
+    keyInfo = await requestJSON<KeyInfo>("/api/key", {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: await file.arrayBuffer()
+    });
+    error = "";
+    render();
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    render();
+  }
 }
 
 async function saveConfig(): Promise<void> {
@@ -147,6 +202,7 @@ function render(): void {
       el("aside", { class: "side" },
         el("h1", {}, "WFB Web"),
         el("p", {}, "Ground station sidecar"),
+        renderProfileSelect(),
         renderNav()
       ),
       el("section", { class: "content" },
@@ -157,10 +213,31 @@ function render(): void {
   );
 }
 
+function renderProfileSelect(): HTMLElement {
+  const selection = profileSelection;
+  if (!selection) {
+    return el("div", { class: "profile-box" }, el("span", {}, "Profile"), el("strong", {}, "-"));
+  }
+  return el("label", { class: "profile-box" },
+    "Profile",
+    el("select", {
+      value: selection.profile,
+      onChange: (event: Event) => selectProfile((event.target as HTMLSelectElement).value)
+    }, ...selection.options.map((option) =>
+      el("option", {
+        value: option.profile,
+        selected: String(option.profile === selection.profile)
+      }, `${option.label} (${option.profile})`)
+    )),
+    el("small", {}, `source: ${selection.source}`)
+  );
+}
+
 function renderNav(): HTMLElement {
   const tabs = [
     ["stats", "Live Stats"],
     ["config", "Configuration"],
+    ["key", "Key"],
     ["radio", "Radio"],
     ["services", "Services"]
   ];
@@ -179,6 +256,8 @@ function renderActiveTab(): HTMLElement {
   switch (activeTab) {
     case "config":
       return renderConfig();
+    case "key":
+      return renderKey();
     case "radio":
       return renderRadio();
     case "services":
@@ -202,7 +281,8 @@ function renderServices(): HTMLElement {
       el("button", { class: "secondary", onClick: () => serviceAction("wifibroadcast-gs", "start") }, "Start GS"),
       el("button", { class: "secondary", onClick: () => serviceAction("wifibroadcast-gs", "stop") }, "Stop GS"),
       el("button", { class: "secondary", onClick: () => serviceAction("rtsp-h265", "restart") }, "Restart H265 RTSP"),
-      el("button", { class: "secondary", onClick: () => serviceAction("rtsp-h264", "restart") }, "Restart H264 RTSP")
+      el("button", { class: "secondary", onClick: () => serviceAction("rtsp-h264", "restart") }, "Restart H264 RTSP"),
+      el("button", { class: "secondary", onClick: () => serviceAction("fpv-camera", "restart") }, "Restart FPV Camera")
     )
   );
 }
@@ -238,6 +318,35 @@ function fileBadge(label: string, path: string): HTMLElement {
   return el("div", { class: "file-badge" }, el("span", {}, label), el("strong", {}, path));
 }
 
+function renderKey(): HTMLElement {
+  const info = keyInfo;
+  const input = el("input", {
+    type: "file",
+    onChange: (event: Event) => {
+      const file = (event.target as HTMLInputElement).files?.[0];
+      if (file) {
+        void uploadKey(file);
+      }
+    }
+  }) as HTMLInputElement;
+
+  return el("div", { class: "panel" },
+    el("h2", {}, "Key"),
+    el("div", { class: "summary-grid" },
+      statCard("Profile", profileSelection?.profile ?? "-", `source: ${profileSelection?.source ?? "-"}`),
+      statCard("Path", info?.path ?? "-", info?.exists ? "present" : "missing"),
+      statCard("Hash", info?.hash || "-", "sha256 short"),
+      statCard("Size", info?.exists ? `${info.size} bytes` : "-", info?.mod_time || "-")
+    ),
+    el("div", { class: "actions" },
+      el("button", {
+        onClick: () => input.click()
+      }, "Upload key"),
+      input
+    )
+  );
+}
+
 function renderRadio(): HTMLElement {
   return el("div", { class: "panel" },
     el("h2", {}, "Radio"),
@@ -262,8 +371,8 @@ function renderStats(): HTMLElement {
   return el("div", { class: "panel" },
     el("h2", {}, "Live Stats"),
     el("div", { class: "summary-grid" },
-      statCard("Stream", statsConnected ? "connected" : "waiting", "127.0.0.1:8103"),
-      statCard("Profile", settingsEvent?.profile ?? "-", settingsEvent?.is_cluster ? "cluster" : "local"),
+      statCard("Stream", statsConnected ? "connected" : "waiting", profileSelection?.options.find((option) => option.profile === profileSelection?.profile)?.api_addr ?? "-"),
+      statCard("Profile", settingsEvent?.profile ?? profileSelection?.profile ?? "-", settingsEvent?.is_cluster ? "cluster" : `source: ${profileSelection?.source ?? "-"}`),
       statCard("WLANs", settingsEvent?.wlans?.join(", ") || config?.default.wfb_nics || "-", "configured radios"),
       statCard("TX WLAN", value(rxEvent?.tx_wlan), "selected antenna")
     ),
@@ -397,13 +506,14 @@ function checkbox<T extends Record<string, string | number | boolean>>(object: T
 }
 
 function streamStats(): void {
-  const source = new EventSource("/api/stats/stream");
-  source.onmessage = (event) => {
+  statsSource?.close();
+  statsSource = new EventSource("/api/stats/stream");
+  statsSource.onmessage = (event) => {
     statsConnected = true;
     applyStatsEvent(event.data);
     render();
   };
-  source.onerror = () => {
+  statsSource.onerror = () => {
     statsConnected = false;
     render();
   };

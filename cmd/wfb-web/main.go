@@ -14,9 +14,10 @@ func main() {
 	cfgPath := env("WFB_WEB_CFG", "/etc/wifibroadcast.cfg")
 	defaultPath := env("WFB_WEB_DEFAULT", "/etc/default/wifibroadcast")
 	masterPath := env("WFB_WEB_MASTER_CFG", "")
+	defaultProfile := env("WFB_WEB_PROFILE", "auto")
 	statsAddr := env("WFB_WEB_STATS_ADDR", "127.0.0.1:8103")
 
-	server := app.NewServer(cfgPath, defaultPath, masterPath, statsAddr)
+	server := app.NewServer(cfgPath, defaultPath, masterPath, defaultProfile, statsAddr)
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
 	frontend.RegisterRoutes(mux)
