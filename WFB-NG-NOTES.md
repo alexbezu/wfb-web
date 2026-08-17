@@ -4,6 +4,20 @@
 ### First install
 -------------
 
+Use the package install path:
+
+```sh
+  sudo apt install python3-all libpcap-dev libsodium-dev libevent-dev python3-pip \
+    python3-pyroute2 python3-twisted python3-serial python3-all-dev python3-venv \
+    iw socat debhelper dh-python fakeroot build-essential python3-msgpack \
+    python3-setuptools libgstrtspserver-1.0-dev libcatch2-dev -y
+
+  make deb
+  sudo apt install ./deb_dist/*.deb
+  sudo systemctl daemon-reload
+  sudo systemctl start wifibroadcast@gs
+```
+
 For the Orange Pi running WFB-ng as the ground station proxy, put this in
 `/etc/wifibroadcast.cfg`:
 
@@ -25,6 +39,8 @@ peer = 'connect://192.168.50.1:5600'       # unicast to PC
 #peer = 'connect://239.50.50.50:5600'      # multicast
 #peer = 'connect://127.0.0.1:5600'         # local RTSP server
 ```
+
+or `sudo cp wfb_ng/conf/master.cfg /etc/wifibroadcast.cfg` for full parameter list
 
 `ldpc = 0` belongs in `[base]`. Set it on the TX side first when testing unknown RX hardware; RX receives session/FEC info from the air.
 `[gs] streams = ...` overrides the default `master.cfg` GS profile, which otherwise starts video, MAVLink, and tunnel. Keep it here for video-only GS.
