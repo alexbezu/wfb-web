@@ -2,64 +2,66 @@
 
 Minimal WFB-ng ground-station web sidecar.
 
-## Run Locally
+Install WFB-ng first: https://github.com/svpcom/wfb-ng
+
+Then install this sidecar as a helper service on the ground station.
+
+## Run on SBC
+
+For Raspberry Pi, Radxa, Orange Pi, and similar boards:
 
 ```sh
-make run
+git clone https://github.com/alexbezu/wfb-web.git
+cd wfb-web
 ```
 
-The local target uses `./tmp/wifibroadcast.cfg` and `./tmp/wifibroadcast.default`.
-On an SBC, install the binary as `/usr/bin/wfb-web`, install
-`scripts/default/wfb-web` to `/etc/default/wfb-web`, and install
-`scripts/systemd/wfb-web.service` to `/lib/systemd/system/wfb-web.service`.
-
-## Endpoints
-
-- `GET /api/config`
-- `GET /api/config/effective`
-- `PUT /api/config`
-- `GET /api/services`
-- `POST /api/services/{wifibroadcast-gs|rtsp-h265|rtsp-h264}/{start|stop|restart|enable|disable}`
-- `GET /api/radio`
-- `GET /api/stats/stream`
+Then use option 2 below. It should work without npm installation 
 
 ## Build
 
 ### Option 1: Build everything on SBC
-  You need:
 
-  `sudo apt install golang nodejs npm make`
+You need:
 
-  Then:
 ```sh
-  cd wfb-web
-  make frontend
-  make build
+sudo apt install golang nodejs npm make
 ```
-  This builds:
 
-  `bin/wfb-web`
+Then:
 
-###  Option 2: Build only Go on SBC
-  If you copy the repo with internal/frontend/dist already generated, then the SBC only needs Go:
 ```sh
-  sudo apt install golang make
-  cd wfb-web
-  make build
+make frontend
+make build
 ```
-  The Go binary embeds internal/frontend/dist, so Node is not needed unless you change web/src/*.
 
-  Best SBC deployment shape
+This builds:
 
-  Build binary:
+```text
+bin/wfb-web
+```
+
+### Option 2: Build only Go on SBC
+
 ```sh
-  make build
-  sudo install -m 0755 bin/wfb-web /usr/bin/wfb-web
-  sudo install -m 0644 scripts/default/wfb-web /etc/default/wfb-web
-  sudo install -m 0644 scripts/systemd/wfb-web.service /lib/systemd/system/wfb-web.service
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now wfb-web
+sudo apt install golang make
+make build
 ```
-  Then open:
 
-  http://SBC_IP:8080/app/
+The Go binary embeds `internal/frontend/dist`, so Node is not needed unless you change `web/src/*`.
+
+## Installation
+
+```sh
+make build
+sudo install -m 0755 bin/wfb-web /usr/bin/wfb-web
+sudo install -m 0644 scripts/default/wfb-web /etc/default/wfb-web
+sudo install -m 0644 scripts/systemd/wfb-web.service /lib/systemd/system/wfb-web.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now wfb-web
+```
+
+Then open:
+
+```text
+http://SBC_IP:8080/app/
+```
