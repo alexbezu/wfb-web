@@ -4,7 +4,12 @@
 ### First install
 -------------
 
-Use the package install path:
+```sh
+curl -o install_gs.sh https://raw.githubusercontent.com/svpcom/wfb-ng/refs/heads/master/scripts/install_gs.sh
+sudo bash ./install_gs.sh
+```
+
+Or install from the sources (after git clone):
 
 ```sh
   sudo apt install python3-all libpcap-dev libsodium-dev libevent-dev python3-pip \
