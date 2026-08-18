@@ -1,7 +1,9 @@
 package radio
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -34,10 +36,13 @@ func Inspect(names []string) []InterfaceInfo {
 }
 
 func run(name string, args ...string) string {
-	cmd := exec.Command(name, args...)
+	bin, err := resolveCommand(name)
+	if err != nil {
+		return err.Error()
+	}
+	cmd := exec.Command(bin, args...)
 	done := make(chan struct{})
 	var out []byte
-	var err error
 	go func() {
 		out, err = cmd.CombinedOutput()
 		close(done)
@@ -52,4 +57,17 @@ func run(name string, args ...string) string {
 		return err.Error()
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func resolveCommand(name string) (string, error) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+	for _, dir := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {
+		path := filepath.Join(dir, name)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return path, nil
+		}
+	}
+	return "", exec.ErrNotFound
 }
