@@ -332,6 +332,7 @@ function renderStandardConfig(): HTMLElement {
   const standard = [
     ["common", "wifi_channel", "WiFi Channel"],
     ["common", "wifi_region", "WiFi Region"],
+    ["common", "wifi_txpower", "TX Power"],
     ["common", "link_domain", "Link Domain"],
     ["base", "bandwidth", "Bandwidth"],
     ["base", "mcs_index", "MCS Index"],
@@ -734,6 +735,8 @@ function el<K extends keyof HTMLElementTagNameMap>(
       node.addEventListener(key.slice(2).toLowerCase(), value as EventListener);
     } else if (key === "class") {
       node.className = String(value);
+    } else if (key === "value" && (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement)) {
+      node.value = String(value);
     } else if ((key === "selected" || key === "disabled" || key === "checked") && (value === false || value === "false")) {
       continue;
     } else if ((key === "selected" || key === "disabled" || key === "checked") && (value === true || value === "true")) {
