@@ -147,6 +147,11 @@ button.secondary {
   color: #1d2329;
 }
 
+button.compact {
+  padding: 6px 9px;
+  font-size: 13px;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -174,6 +179,20 @@ button:disabled {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.service-table td:first-child {
+  white-space: nowrap;
 }
 
 .stats {

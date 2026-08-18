@@ -28,6 +28,9 @@ type ServiceState = {
   unit: string;
   active: string;
   sub: string;
+  load: string;
+  unit_file: string;
+  can_reload: boolean;
 };
 
 type ProfileSelection = {
@@ -283,21 +286,58 @@ function renderActiveTab(): HTMLElement {
 function renderServices(): HTMLElement {
   return el("div", { class: "panel" },
     el("h2", {}, "Services"),
-    ...services.map((service) =>
-      el("p", {},
-        el("span", { class: `status-dot ${service.active === "active" ? "active" : ""}` }),
-        `${service.unit}: ${service.active}/${service.sub}`
+    services.length
+      ? el("div", { class: "table-wrap" },
+        el("table", { class: "service-table" },
+          el("thead", {}, el("tr", {},
+            el("th", {}, "Service"),
+            el("th", {}, "Actions"),
+            el("th", {}, "State"),
+            el("th", {}, "Load")
+          )),
+          el("tbody", {}, ...services.map(renderServiceRow))
+        )
+      )
+      : el("p", { class: "muted" }, "No service data")
+  );
+}
+
+function renderServiceRow(service: ServiceState): HTMLElement {
+  const key = serviceKey(service.unit);
+  return el("tr", {},
+    el("td", {},
+      el("span", { class: `status-dot ${service.active === "active" ? "active" : ""}` }),
+      service.unit
+    ),
+    el("td", {},
+      el("div", { class: "row-actions" },
+        el("button", { class: "secondary compact", onClick: () => serviceAction(key, "start") }, "Start"),
+        el("button", { class: "secondary compact", onClick: () => serviceAction(key, "stop") }, "Stop"),
+        el("button", { class: "compact", onClick: () => serviceAction(key, "restart") }, "Restart")
       )
     ),
-    el("div", { class: "actions" },
-      el("button", { onClick: () => serviceAction("wifibroadcast-gs", "restart") }, "Restart GS"),
-      el("button", { class: "secondary", onClick: () => serviceAction("wifibroadcast-gs", "start") }, "Start GS"),
-      el("button", { class: "secondary", onClick: () => serviceAction("wifibroadcast-gs", "stop") }, "Stop GS"),
-      el("button", { class: "secondary", onClick: () => serviceAction("rtsp-h265", "restart") }, "Restart H265 RTSP"),
-      el("button", { class: "secondary", onClick: () => serviceAction("rtsp-h264", "restart") }, "Restart H264 RTSP"),
-      el("button", { class: "secondary", onClick: () => serviceAction("fpv-camera", "restart") }, "Restart FPV Camera")
-    )
+    el("td", {}, `${service.active}/${service.sub}`),
+    el("td", {}, service.load || "-")
   );
+}
+
+function serviceKey(unit: string): string {
+  switch (unit) {
+    case "wifibroadcast@gs":
+    case "wifibroadcast@gs.service":
+      return "wifibroadcast-gs";
+    case "wifibroadcast@drone":
+    case "wifibroadcast@drone.service":
+      return "wifibroadcast-drone";
+    case "rtsp@h265":
+    case "rtsp@h265.service":
+      return "rtsp-h265";
+    case "rtsp@h264":
+    case "rtsp@h264.service":
+      return "rtsp-h264";
+    default:
+      return "fpv-camera";
+  }
 }
 
 function renderConfig(): HTMLElement {
