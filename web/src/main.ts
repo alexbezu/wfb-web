@@ -16,8 +16,12 @@ type EffectiveField = {
   section: string;
   key: string;
   value: string;
+  default_value: string;
   default: boolean;
+  changed: boolean;
   source: string;
+  comment: string;
+  editable: boolean;
 };
 
 type ServiceState = {
@@ -109,6 +113,10 @@ let statsConnected = false;
 let error = "";
 let activeTab = "stats";
 let statsSource: EventSource | null = null;
+let configSearch = "";
+let configSection = "all";
+let configChangedOnly = false;
+let configDrafts = new Map<string, string>();
 
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -170,15 +178,20 @@ async function uploadKey(file: File): Promise<void> {
 }
 
 async function saveConfig(): Promise<void> {
-  if (!config) {
+  if (!config || configDrafts.size === 0) {
     return;
   }
   try {
-    config = await requestJSON<Config>("/api/config", {
+    const updates = Array.from(configDrafts.entries()).map(([id, value]) => {
+      const [section, key] = id.split(".", 2);
+      return { section, key, value };
+    });
+    effectiveConfig = await requestJSON<EffectiveConfig>("/api/config/params", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config)
+      body: JSON.stringify({ updates })
     });
+    configDrafts = new Map();
     await load();
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
@@ -291,27 +304,196 @@ function renderConfig(): HTMLElement {
   if (!config || !effectiveConfig) {
     return el("div", { class: "panel" }, "No config loaded");
   }
+  const fields = allConfigFields();
+  const changed = fields.filter((fieldInfo) => isFieldChanged(fieldInfo)).length;
   return el("div", { class: "panel" },
-    el("h2", {}, "Configuration"),
+    el("div", { class: "panel-head" },
+      el("div", {},
+        el("h2", {}, "Configuration"),
+        el("p", { class: "muted" }, `${fields.length} parameters, ${changed} non-default, ${configDrafts.size} pending edit${configDrafts.size === 1 ? "" : "s"}`)
+      ),
+      el("div", { class: "actions" },
+        el("button", { disabled: String(configDrafts.size === 0), onClick: () => saveConfig() }, "Save"),
+        el("button", { class: "secondary", disabled: String(configDrafts.size === 0), onClick: () => { configDrafts = new Map(); render(); } }, "Discard")
+      )
+    ),
     el("div", { class: "file-grid" },
       fileBadge("master.cfg", effectiveConfig.files.master || "not found"),
       fileBadge("wifibroadcast.cfg", effectiveConfig.files.local),
       fileBadge("default", effectiveConfig.files.default)
     ),
-    ...effectiveConfig.sections.map(renderConfigSection)
+    renderStandardConfig(),
+    renderConfigToolbar(),
+    renderParameterConfigTable()
   );
 }
 
-function renderConfigSection(section: { name: string; fields: EffectiveField[] }): HTMLElement {
+function renderStandardConfig(): HTMLElement {
+  const standard = [
+    ["common", "wifi_channel", "WiFi Channel"],
+    ["common", "wifi_region", "WiFi Region"],
+    ["common", "link_domain", "Link Domain"],
+    ["base", "bandwidth", "Bandwidth"],
+    ["base", "mcs_index", "MCS Index"],
+    ["base", "ldpc", "LDPC"],
+    ["base", "stbc", "STBC"],
+    ["base", "force_vht", "Force VHT"],
+    ["gs_video", "peer", "GS Video Peer"],
+    ["default", "WFB_NICS", "WFB NICS"],
+    ["default", "RTP_MTU", "RTP MTU"],
+    ["default", "RTP_JITTER", "RTP Jitter"],
+    ["default", "RTSP_PORT", "RTSP Port"],
+    ["default", "RTSP_URI", "RTSP URI"]
+  ];
   return el("section", { class: "config-section" },
-    el("h3", {}, `[${section.name}]`),
-    table(["Default", "Key", "Value", "Source"], section.fields.map((fieldInfo) => [
-      fieldInfo.default ? "yes" : "no",
-      fieldInfo.key,
-      fieldInfo.value,
-      fieldInfo.source
-    ]))
+    el("h3", {}, "Standard"),
+    el("div", { class: "standard-grid" }, ...standard.map(([section, key, label]) => {
+      const fieldInfo = findConfigField(section, key);
+      return renderParamControl(label, fieldInfo);
+    }))
   );
+}
+
+function renderParamControl(label: string, fieldInfo: EffectiveField | null): HTMLElement {
+  if (!fieldInfo) {
+    return el("label", {}, label, el("input", { disabled: "true", value: "-" }));
+  }
+  const id = fieldID(fieldInfo);
+  const valueNow = configDrafts.get(id) ?? fieldInfo.value;
+  const attrs: Record<string, string | ((event: Event) => void)> = {
+    value: valueNow,
+    onChange: (event: Event) => { setConfigDraft(fieldInfo, (event.target as HTMLInputElement).value); render(); }
+  };
+  return el("label", { class: isFieldChanged(fieldInfo) ? "changed" : "" },
+    label,
+    el("input", attrs),
+    el("small", {}, fieldInfo.comment || `default: ${fieldInfo.default_value || "-"}`)
+  );
+}
+
+function renderConfigToolbar(): HTMLElement {
+  const sections = ["all", ...new Set(effectiveConfig?.sections.map((section) => section.name) ?? [])];
+  return el("div", { class: "config-toolbar" },
+    el("input", {
+      value: configSearch,
+      placeholder: "Search parameters",
+      onInput: (event: Event) => { configSearch = (event.target as HTMLInputElement).value; render(); }
+    }),
+    el("select", {
+      value: configSection,
+      onChange: (event: Event) => { configSection = (event.target as HTMLSelectElement).value; render(); }
+    }, ...sections.map((section) => el("option", { value: section, selected: String(section === configSection) }, section === "all" ? "All sections" : `[${section}]`))),
+    el("label", { class: "inline-toggle" },
+      el("input", {
+        type: "checkbox",
+        checked: String(configChangedOnly),
+        onChange: (event: Event) => { configChangedOnly = (event.target as HTMLInputElement).checked; render(); }
+      }),
+      "Changed only"
+    )
+  );
+}
+
+function renderParameterConfigTable(): HTMLElement {
+  const fields = filteredConfigFields();
+  if (fields.length === 0) {
+    return el("p", { class: "muted" }, "No matching parameters");
+  }
+  return el("div", { class: "param-table-wrap" },
+    el("table", { class: "param-table" },
+      el("thead", {}, el("tr", {},
+        el("th", {}, "Status"),
+        el("th", {}, "Parameter"),
+        el("th", {}, "Value"),
+        el("th", {}, "Default"),
+        el("th", {}, "Source"),
+        el("th", {}, "")
+      )),
+      el("tbody", {}, ...fields.map(renderConfigRow))
+    )
+  );
+}
+
+function renderConfigRow(fieldInfo: EffectiveField): HTMLElement {
+  const id = fieldID(fieldInfo);
+  const valueNow = configDrafts.get(id) ?? fieldInfo.value;
+  return el("tr", { class: isFieldChanged(fieldInfo) ? "row-changed" : "" },
+    el("td", {}, statusPill(configDrafts.has(id) ? "pending" : (isFieldChanged(fieldInfo) ? "changed" : "default"))),
+    el("td", {},
+      el("strong", {}, `${fieldInfo.section}.${fieldInfo.key}`),
+      fieldInfo.comment ? el("small", {}, fieldInfo.comment) : ""
+    ),
+    el("td", {}, el("textarea", {
+      value: valueNow,
+      rows: String(Math.min(5, Math.max(1, valueNow.split("\n").length))),
+      onChange: (event: Event) => { setConfigDraft(fieldInfo, (event.target as HTMLTextAreaElement).value); render(); }
+    })),
+    el("td", {}, el("code", {}, fieldInfo.default_value || "-")),
+    el("td", {}, fieldInfo.source),
+    el("td", {}, el("button", {
+      class: "icon-button",
+      disabled: String(!fieldInfo.default_value && !configDrafts.has(id)),
+      title: "Reset to default",
+      onClick: () => {
+        if (fieldInfo.default_value) {
+          setConfigDraft(fieldInfo, fieldInfo.default_value);
+        } else {
+          configDrafts.delete(id);
+        }
+        render();
+      }
+    }, "Reset"))
+  );
+}
+
+function statusPill(label: string): HTMLElement {
+  return el("span", { class: `pill ${label}` }, label);
+}
+
+function allConfigFields(): EffectiveField[] {
+  return effectiveConfig?.sections.flatMap((section) => section.fields) ?? [];
+}
+
+function filteredConfigFields(): EffectiveField[] {
+  const needle = configSearch.trim().toLowerCase();
+  return allConfigFields().filter((fieldInfo) => {
+    if (configSection !== "all" && fieldInfo.section !== configSection) {
+      return false;
+    }
+    if (configChangedOnly && !isFieldChanged(fieldInfo)) {
+      return false;
+    }
+    if (!needle) {
+      return true;
+    }
+    return `${fieldInfo.section}.${fieldInfo.key} ${fieldInfo.value} ${fieldInfo.comment}`.toLowerCase().includes(needle);
+  });
+}
+
+function findConfigField(section: string, key: string): EffectiveField | null {
+  return allConfigFields().find((fieldInfo) => fieldInfo.section === section && fieldInfo.key === key) ?? null;
+}
+
+function fieldID(fieldInfo: EffectiveField): string {
+  return `${fieldInfo.section}.${fieldInfo.key}`;
+}
+
+function setConfigDraft(fieldInfo: EffectiveField, valueNow: string): void {
+  const id = fieldID(fieldInfo);
+  if (valueNow === fieldInfo.value) {
+    configDrafts.delete(id);
+  } else {
+    configDrafts.set(id, valueNow);
+  }
+}
+
+function isFieldChanged(fieldInfo: EffectiveField): boolean {
+  const valueNow = configDrafts.get(fieldID(fieldInfo)) ?? fieldInfo.value;
+  return Boolean(fieldInfo.default_value) && normalizeParamValue(valueNow) !== normalizeParamValue(fieldInfo.default_value);
+}
+
+function normalizeParamValue(valueNow: string): string {
+  return valueNow.split(/\s+/).filter(Boolean).join(" ");
 }
 
 function fileBadge(label: string, path: string): HTMLElement {
@@ -511,12 +693,18 @@ function streamStats(): void {
   statsSource.onmessage = (event) => {
     statsConnected = true;
     applyStatsEvent(event.data);
-    render();
+    renderStatsIfVisible();
   };
   statsSource.onerror = () => {
     statsConnected = false;
-    render();
+    renderStatsIfVisible();
   };
+}
+
+function renderStatsIfVisible(): void {
+  if (activeTab === "stats") {
+    render();
+  }
 }
 
 function applyStatsEvent(line: string): void {
@@ -546,8 +734,10 @@ function el<K extends keyof HTMLElementTagNameMap>(
       node.addEventListener(key.slice(2).toLowerCase(), value as EventListener);
     } else if (key === "class") {
       node.className = String(value);
-    } else if (key === "selected" && value === "false") {
+    } else if ((key === "selected" || key === "disabled" || key === "checked") && (value === false || value === "false")) {
       continue;
+    } else if ((key === "selected" || key === "disabled" || key === "checked") && (value === true || value === "true")) {
+      node.setAttribute(key, key);
     } else {
       node.setAttribute(key, String(value));
     }

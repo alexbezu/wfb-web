@@ -44,7 +44,16 @@ type DefaultConfig struct {
 }
 
 func Load(cfgPath, defaultPath string) (Config, error) {
+	return LoadWithMaster("", cfgPath, defaultPath)
+}
+
+func LoadWithMaster(masterPath, cfgPath, defaultPath string) (Config, error) {
 	cfg := Defaults()
+	if path := resolveMasterPath(masterPath); path != "" {
+		if err := loadINI(path, &cfg); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return cfg, err
+		}
+	}
 	if err := loadINI(cfgPath, &cfg); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return cfg, err
 	}

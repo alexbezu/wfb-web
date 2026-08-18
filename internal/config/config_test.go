@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,5 +79,59 @@ func TestSaveCreatesBackups(t *testing.T) {
 	}
 	if _, err := os.Stat(defaultPath + ".bak"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSaveParametersWritesDiffAndPreservesLocalComments(t *testing.T) {
+	dir := t.TempDir()
+	masterPath := filepath.Join(dir, "master.cfg")
+	cfgPath := filepath.Join(dir, "wifibroadcast.cfg")
+	defaultPath := filepath.Join(dir, "wifibroadcast")
+
+	if err := os.WriteFile(masterPath, []byte(`[common]
+wifi_channel = 165 # master channel comment
+wifi_region = 'BO'
+
+[base]
+mcs_index = 1 # master mcs comment
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`[common]
+# keep the operator note
+wifi_channel = 161 # keep local inline
+wifi_region = 'US'
+
+[base]
+mcs_index = 2
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultPath, []byte(`WFB_NICS="wlan0 wlan1"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := SaveParameters(masterPath, cfgPath, defaultPath, []ParameterUpdate{
+		{Section: "common", Key: "wifi_region", Value: "'BO'"},
+		{Section: "base", Key: "mcs_index", Value: "3"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "# keep the operator note\nwifi_channel = 161 # keep local inline") {
+		t.Fatalf("local comments were not preserved:\n%s", got)
+	}
+	if strings.Contains(got, "wifi_region") {
+		t.Fatalf("default-valued override should be omitted:\n%s", got)
+	}
+	if !strings.Contains(got, "mcs_index = 3 # master mcs comment") {
+		t.Fatalf("new override should copy master inline comment:\n%s", got)
 	}
 }

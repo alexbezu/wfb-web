@@ -2,10 +2,8 @@ package config
 
 import (
 	"bufio"
-	"errors"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -26,11 +24,15 @@ type EffectiveConfigSection struct {
 }
 
 type EffectiveConfigField struct {
-	Section string `json:"section"`
-	Key     string `json:"key"`
-	Value   string `json:"value"`
-	Default bool   `json:"default"`
-	Source  string `json:"source"`
+	Section      string `json:"section"`
+	Key          string `json:"key"`
+	Value        string `json:"value"`
+	DefaultValue string `json:"default_value"`
+	Default      bool   `json:"default"`
+	Changed      bool   `json:"changed"`
+	Source       string `json:"source"`
+	Comment      string `json:"comment"`
+	Editable     bool   `json:"editable"`
 }
 
 type configValue struct {
@@ -42,56 +44,11 @@ type configValue struct {
 }
 
 func LoadEffective(masterPath, cfgPath, defaultPath string) (EffectiveConfig, error) {
-	masterPath = resolveMasterPath(masterPath)
-	values := map[string]configValue{}
-	order := []string{}
-
-	if masterPath != "" {
-		addValues(values, &order, readConfigValues(masterPath, "master"))
+	params, err := LoadParameters(masterPath, cfgPath, defaultPath)
+	if err != nil {
+		return EffectiveConfig{}, err
 	}
-
-	localValues := readConfigValues(cfgPath, "local")
-	if len(localValues) == 0 {
-		if _, err := os.Stat(cfgPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return EffectiveConfig{}, err
-		}
-	}
-	addValues(values, &order, localValues)
-	addValues(values, &order, readDefaultValues(defaultPath, "default"))
-
-	bySection := map[string][]EffectiveConfigField{}
-	for _, id := range order {
-		item := values[id]
-		bySection[item.section] = append(bySection[item.section], EffectiveConfigField{
-			Section: item.section,
-			Key:     item.key,
-			Value:   item.value,
-			Default: item.source == "master",
-			Source:  item.source,
-		})
-	}
-
-	sectionNames := make([]string, 0, len(bySection))
-	for name := range bySection {
-		sectionNames = append(sectionNames, name)
-	}
-	sort.SliceStable(sectionNames, func(i, j int) bool {
-		if sectionNames[i] == "common" {
-			return true
-		}
-		if sectionNames[j] == "common" {
-			return false
-		}
-		return sectionNames[i] < sectionNames[j]
-	})
-
-	result := EffectiveConfig{
-		Files: ConfigFiles{Master: masterPath, Local: cfgPath, Default: defaultPath},
-	}
-	for _, name := range sectionNames {
-		result.Sections = append(result.Sections, EffectiveConfigSection{Name: name, Fields: bySection[name]})
-	}
-	return result, nil
+	return EffectiveConfig(params), nil
 }
 
 func addValues(dst map[string]configValue, order *[]string, values []configValue) {

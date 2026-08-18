@@ -35,6 +35,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", s.getConfig)
 	mux.HandleFunc("GET /api/config/effective", s.getEffectiveConfig)
 	mux.HandleFunc("PUT /api/config", s.putConfig)
+	mux.HandleFunc("PUT /api/config/params", s.putConfigParams)
 	mux.HandleFunc("GET /api/services", s.getServices)
 	mux.HandleFunc("POST /api/services/", s.postService)
 	mux.HandleFunc("GET /api/radio", s.getRadio)
@@ -70,7 +71,7 @@ func (s *Server) putProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.Load(s.cfgPath, s.defaultPath)
+	cfg, err := config.LoadWithMaster(s.masterPath, s.cfgPath, s.defaultPath)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -97,7 +98,27 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if err := config.Save(s.cfgPath, s.defaultPath, cfg); err != nil {
+	if err := config.SaveDiff(s.masterPath, s.cfgPath, s.defaultPath, cfg); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+func (s *Server) putConfigParams(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Updates []config.ParameterUpdate `json:"updates"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := config.SaveParameters(s.masterPath, s.cfgPath, s.defaultPath, req.Updates); err != nil {
+		writeError(w, err)
+		return
+	}
+	cfg, err := config.LoadEffective(s.masterPath, s.cfgPath, s.defaultPath)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
@@ -114,7 +135,7 @@ func (s *Server) getServices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getRadio(w http.ResponseWriter, r *http.Request) {
-	cfg, _ := config.Load(s.cfgPath, s.defaultPath)
+	cfg, _ := config.LoadWithMaster(s.masterPath, s.cfgPath, s.defaultPath)
 	writeJSON(w, http.StatusOK, radio.Inspect(strings.Fields(cfg.Default.WFBNics)))
 }
 
