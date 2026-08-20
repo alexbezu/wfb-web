@@ -116,7 +116,7 @@ peer = 'connect://239.50.50.50:5600'
 On the PC:
 
 ```sh
-gst-launch-1.0 -v udpsrc multicast-group=239.50.50.50 port=5600 auto-multicast=true caps='application/x-rtp, media=(string)video, clock-rate=(int)90000,encoding-name=(string)H265' ! rtph265depay ! avdec_h265 ! videoconvert ! autovideosink sync=false
+gst-launch-1.0 -v udpsrc multicast-group=239.50.50.50 port=5600 auto-multicast=true multicast-iface=eth0 caps='application/x-rtp, media=(string)video, clock-rate=(int)90000,encoding-name=(string)H265' ! rtph265depay ! avdec_h265 ! videoconvert ! autovideosink sync=false
 ```
 
 If multicast does not leave the Orange Pi on the right interface, add a route, replacing `eth0` with your LAN interface:
@@ -140,6 +140,8 @@ sudo tcpdump -ni eth0 host 239.50.50.50 and udp port 5600
 
 `wfb-server` reads `/etc/wifibroadcast.cfg`, puts `wlan0` into monitor mode,
 sets the channel, then starts per-stream helpers.
+
+To run the server "from sources" the equivalent is `python -m wfb_ng.server --profiles gs --wlans wlan0`
 
 ### Deb package installs
 --------------------
@@ -189,6 +191,8 @@ Raw monitor packet check:
 
 ```sh
 sudo systemctl stop wifibroadcast@gs
+sudo nmcli dev status
+sudo nmcli device set wlan0 managed no
 sudo ip link set wlan0 down
 sudo iw dev wlan0 set type monitor
 sudo ip link set wlan0 up

@@ -19,14 +19,13 @@ type Server struct {
 	cfgPath     string
 	defaultPath string
 	masterPath  string
-	statsAddr   string
 	mu          sync.RWMutex
 	profile     profile.Selection
 }
 
-func NewServer(cfgPath, defaultPath, masterPath, defaultProfile, statsAddr string) *Server {
+func NewServer(cfgPath, defaultPath, masterPath, defaultProfile string) *Server {
 	selection := profile.Detect(defaultProfile)
-	return &Server{cfgPath: cfgPath, defaultPath: defaultPath, masterPath: masterPath, statsAddr: statsAddr, profile: selection}
+	return &Server{cfgPath: cfgPath, defaultPath: defaultPath, masterPath: masterPath, profile: selection}
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
@@ -190,11 +189,9 @@ func (s *Server) streamStats(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	selection := s.profile
 	s.mu.RUnlock()
-	addr := s.statsAddr
+	addr := "127.0.0.1:8103"
 	if selection.Profile == "drone" {
 		addr = "127.0.0.1:8102"
-	} else if selection.Profile == "gs" {
-		addr = "127.0.0.1:8103"
 	}
 	stats.ProxySSE(w, r, addr)
 }
