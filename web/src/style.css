@@ -179,12 +179,75 @@ button:disabled {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.compact-field {
+  width: 160px;
+}
+
+.compact-field input {
+  padding: 7px 9px;
 }
 
 .row-actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.endpoint-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.endpoint-card {
+  border: 1px solid #dfe5ea;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.endpoint-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.endpoint-head h3 {
+  font-size: 15px;
+  margin: 0 0 6px;
+}
+
+.endpoint-head code,
+.command-row code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.endpoint-head small {
+  display: block;
+  color: #6a7683;
+  margin-top: 5px;
+}
+
+.endpoint-commands {
+  display: grid;
+  gap: 8px;
+}
+
+.command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  background: #f8fafb;
+  border: 1px solid #e6ebef;
+  border-radius: 6px;
+  padding: 8px;
 }
 
 .table-wrap {
@@ -507,5 +570,11 @@ td {
 
   .config-toolbar {
     grid-template-columns: 1fr;
+  }
+
+  .endpoint-head,
+  .command-row {
+    grid-template-columns: 1fr;
+    display: grid;
   }
 }
