@@ -99,6 +99,9 @@ func (m *Manager) Start(opts Options) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, cmdline[0], cmdline[1:]...)
+	output := &tailBuffer{limit: 64 * 1024}
+	cmd.Stdout = output
+	cmd.Stderr = output
 	done := make(chan struct{})
 	m.cancel = cancel
 	m.running = true
@@ -126,10 +129,22 @@ func (m *Manager) Start(opts Options) error {
 		m.running = false
 		m.cancel = nil
 		if err != nil && ctx.Err() == nil {
-			m.lastErr = err.Error()
+			m.lastErr = commandError(err, output.String())
+		} else if err == nil && ctx.Err() == nil {
+			m.lastErr = "camera pipeline exited"
 		}
 		m.mu.Unlock()
 	}()
+	select {
+	case <-done:
+		m.mu.Lock()
+		err := m.lastErr
+		m.mu.Unlock()
+		if err != "" {
+			return errors.New(err)
+		}
+	case <-time.After(350 * time.Millisecond):
+	}
 	return nil
 }
 
@@ -262,4 +277,33 @@ func buildCommand(opts Options) []string {
 		"!", "udpsink", "host="+opts.Host, fmt.Sprintf("port=%d", opts.Port), "sync=false", "async=false",
 	)
 	return args
+}
+
+func commandError(err error, output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return err.Error()
+	}
+	lines := strings.Split(output, "\n")
+	if len(lines) > 12 {
+		lines = lines[len(lines)-12:]
+	}
+	return err.Error() + ": " + strings.Join(lines, "\n")
+}
+
+type tailBuffer struct {
+	limit int
+	data  []byte
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.data = append(b.data, p...)
+	if len(b.data) > b.limit {
+		b.data = b.data[len(b.data)-b.limit:]
+	}
+	return len(p), nil
+}
+
+func (b *tailBuffer) String() string {
+	return string(b.data)
 }

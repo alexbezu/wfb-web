@@ -61,6 +61,12 @@ func (s *Server) ReconcileRuntime() {
 	}
 }
 
+func (s *Server) selectedProfile() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.profile.Profile
+}
+
 func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	selection := s.profile
@@ -349,6 +355,10 @@ func (s *Server) rtspOptions() rtsp.Options {
 }
 
 func (s *Server) reconcileRTSP() error {
+	if s.selectedProfile() != "gs" {
+		return s.rtsp.Stop()
+	}
+
 	cfg, err := config.LoadWithMaster(s.masterPath, s.cfgPath, s.defaultPath)
 	if err != nil {
 		return err
@@ -378,6 +388,10 @@ func (s *Server) reconcileRTSP() error {
 }
 
 func (s *Server) reconcileCamera() error {
+	if s.selectedProfile() != "drone" {
+		return s.camera.Stop()
+	}
+
 	cfg, err := config.LoadWithMaster(s.masterPath, s.cfgPath, s.defaultPath)
 	if err != nil {
 		return err
