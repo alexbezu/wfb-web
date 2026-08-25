@@ -4,7 +4,11 @@ type Config = {
   common: { wifi_channel: number; wifi_region: string; link_domain: string };
   base: { ldpc: number; stbc: number; bandwidth: number; mcs_index: number; force_vht: boolean };
   gs_video: { peer: string };
-  default: { wfb_nics: string; rtp_mtu: number; rtp_jitter: number; rtsp_port: number; rtsp_uri: string };
+  default: {
+    wfb_nics: string; rtp_mtu: number; rtp_jitter: number; rtsp_port: number; rtsp_uri: string; rtsp_codec: string;
+    camera_enabled: boolean; camera_source: string; camera_device: string; camera_rtsp_url: string; camera_codec: string; camera_host: string; camera_port: number;
+    camera_width: number; camera_height: number; camera_framerate: number; camera_bitrate: number; camera_mtu: number; camera_test_pattern: string;
+  };
 };
 
 type EffectiveConfig = {
@@ -40,6 +44,19 @@ type RTSPState = {
   options: { codec: string; mtu: number; port: number; uri: string; latency: number; rtp_port: number };
   url: string;
   native: boolean;
+  error?: string;
+};
+
+type CameraState = {
+  unit: string;
+  active: string;
+  sub: string;
+  options: {
+    enabled: boolean; source: string; device: string; rtsp_url: string; codec: string; host: string; port: number; width: number; height: number;
+    framerate: number; bitrate: number; mtu: number; pattern: string;
+  };
+  output: string;
+  command: string;
   error?: string;
 };
 
@@ -118,6 +135,7 @@ let effectiveConfig: EffectiveConfig | null = null;
 let profileSelection: ProfileSelection | null = null;
 let services: ServiceState[] = [];
 let rtspState: RTSPState | null = null;
+let cameraState: CameraState | null = null;
 let radios: RadioInfo[] = [];
 let keyInfo: KeyInfo | null = null;
 let settingsEvent: WFBSettingsEvent | null = null;
@@ -150,6 +168,7 @@ async function load(): Promise<void> {
     profileSelection = await requestJSON<ProfileSelection>("/api/profile");
     services = await requestJSON<ServiceState[]>("/api/services");
     rtspState = await requestJSON<RTSPState>("/api/rtsp");
+    cameraState = await requestJSON<CameraState>("/api/camera");
     radios = await requestJSON<RadioInfo[]>("/api/radio");
     keyInfo = await requestJSON<KeyInfo>("/api/key");
     error = "";
@@ -315,6 +334,21 @@ function renderEndpoints(): HTMLElement {
   const rtspURL = `rtsp://${window.location.hostname || "127.0.0.1"}:${rtspPort}${rtspURI}`;
   const endpoints = [];
   const iface = multicastIface.trim() || "eth0";
+  const camera = cameraState?.options;
+  if (camera) {
+    const cameraMode = camera.codec === "h265" ? "H265" : "H264";
+    const cameraDepay = camera.codec === "h265" ? "rtph265depay" : "rtph264depay";
+    const cameraCaps = `application/x-rtp,media=video,clock-rate=90000,encoding-name=${cameraMode}`;
+    endpoints.push({
+      title: "Camera RTP",
+      value: `udp://${camera.host}:${camera.port}`,
+      detail: `wfb-web-camera: ${cameraState?.active ?? "unknown"}/${cameraState?.sub ?? "unknown"}, source ${camera.source}`,
+      commands: [
+        `gst-launch-1.0 -v udpsrc address=${camera.host} port=${camera.port} caps='${cameraCaps}' ! ${cameraDepay} ! decodebin ! autovideosink sync=false`,
+        `CODEC=${camera.codec} HOST=${camera.host} PORT=${camera.port} ./scripts/watch-camera-video`
+      ]
+    });
+  }
 
   if (peer && peer.addr === "127.0.0.1") {
     endpoints.push({
@@ -471,6 +505,8 @@ function renderServices(): HTMLElement {
 
 function renderServiceRow(service: ServiceState): HTMLElement {
   const key = serviceKey(service.unit);
+  const disabledReason = serviceDisabledReason(key);
+  const disabled = disabledReason !== "";
   return el("tr", {},
     el("td", {},
       el("span", { class: `status-dot ${service.active === "active" ? "active" : ""}` }),
@@ -478,14 +514,28 @@ function renderServiceRow(service: ServiceState): HTMLElement {
     ),
     el("td", {},
       el("div", { class: "row-actions" },
-        el("button", { class: "secondary compact", onClick: () => serviceAction(key, "start") }, "Start"),
-        el("button", { class: "secondary compact", onClick: () => serviceAction(key, "stop") }, "Stop"),
-        el("button", { class: "compact", onClick: () => serviceAction(key, "restart") }, "Restart")
-      )
+        el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "start") }, "Start"),
+        el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "stop") }, "Stop"),
+        el("button", { class: "compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "restart") }, "Restart")
+      ),
+      disabledReason ? el("small", { class: "muted" }, disabledReason) : ""
     ),
     el("td", {}, `${service.active}/${service.sub}`),
     el("td", {}, service.load || "-")
   );
+}
+
+function serviceDisabledReason(key: string): string {
+  const selected = profileSelection?.profile ?? "gs";
+  const gsOnly = new Set(["wifibroadcast-gs", "rtsp-h265", "rtsp-h264", "wfb-web-rtsp"]);
+  const droneOnly = new Set(["wifibroadcast-drone", "fpv-camera", "wfb-web-camera"]);
+  if (selected === "drone" && gsOnly.has(key)) {
+    return "Ground-station service disabled for drone profile";
+  }
+  if (selected === "gs" && droneOnly.has(key)) {
+    return "Drone service disabled for ground-station profile";
+  }
+  return "";
 }
 
 function serviceKey(unit: string): string {
@@ -504,6 +554,8 @@ function serviceKey(unit: string): string {
       return "rtsp-h264";
     case "wfb-web-rtsp":
       return "wfb-web-rtsp";
+    case "wfb-web-camera":
+      return "wfb-web-camera";
     default:
       return "fpv-camera";
   }
@@ -553,7 +605,14 @@ function renderStandardConfig(): HTMLElement {
     ["default", "RTP_MTU", "RTP MTU"],
     ["default", "RTP_JITTER", "RTP Jitter"],
     ["default", "RTSP_PORT", "RTSP Port"],
-    ["default", "RTSP_URI", "RTSP URI"]
+    ["default", "RTSP_URI", "RTSP URI"],
+    ["default", "WFB_WEB_RTSP_CODEC", "RTSP Codec"],
+    ["default", "WFB_WEB_CAMERA_ENABLED", "Camera Enabled"],
+    ["default", "WFB_WEB_CAMERA_SOURCE", "Camera Source"],
+    ["default", "WFB_WEB_CAMERA_RTSP_URL", "Camera RTSP URL"],
+    ["default", "WFB_WEB_CAMERA_CODEC", "Camera Codec"],
+    ["default", "WFB_WEB_CAMERA_PORT", "Camera RTP Port"],
+    ["default", "WFB_WEB_CAMERA_DEVICE", "Camera Device"]
   ];
   return el("section", { class: "config-section" },
     el("h3", {}, "Standard"),

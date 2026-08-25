@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/OpenIPC/wfb-web/internal/camera"
 	"github.com/OpenIPC/wfb-web/internal/config"
 	"github.com/OpenIPC/wfb-web/internal/keystore"
 	"github.com/OpenIPC/wfb-web/internal/profile"
@@ -23,13 +24,13 @@ type Server struct {
 	masterPath  string
 	mu          sync.RWMutex
 	profile     profile.Selection
+	camera      *camera.Manager
 	rtsp        *rtsp.Manager
-	rtspCodec   string
 }
 
-func NewServer(cfgPath, defaultPath, masterPath, defaultProfile, rtspCodec string) *Server {
+func NewServer(cfgPath, defaultPath, masterPath, defaultProfile string) *Server {
 	selection := profile.Detect(defaultProfile)
-	return &Server{cfgPath: cfgPath, defaultPath: defaultPath, masterPath: masterPath, profile: selection, rtsp: rtsp.NewManager(), rtspCodec: rtspCodec}
+	return &Server{cfgPath: cfgPath, defaultPath: defaultPath, masterPath: masterPath, profile: selection, camera: camera.NewManager(), rtsp: rtsp.NewManager()}
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
@@ -41,6 +42,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/config/params", s.putConfigParams)
 	mux.HandleFunc("GET /api/services", s.getServices)
 	mux.HandleFunc("POST /api/services/", s.postService)
+	mux.HandleFunc("GET /api/camera", s.getCamera)
+	mux.HandleFunc("POST /api/camera/", s.postCamera)
 	mux.HandleFunc("GET /api/rtsp", s.getRTSP)
 	mux.HandleFunc("POST /api/rtsp/", s.postRTSP)
 	mux.HandleFunc("GET /api/radio", s.getRadio)
@@ -50,6 +53,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) ReconcileRuntime() {
+	if err := s.reconcileCamera(); err != nil {
+		log.Printf("camera reconcile failed: %v", err)
+	}
 	if err := s.reconcileRTSP(); err != nil {
 		log.Printf("rtsp reconcile failed: %v", err)
 	}
@@ -145,6 +151,7 @@ func (s *Server) getServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	states = append(states, rtspServiceState(s.rtspStatus()))
+	states = append(states, cameraServiceState(s.cameraStatus()))
 	writeJSON(w, http.StatusOK, states)
 }
 
@@ -183,8 +190,16 @@ func (s *Server) postService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("expected /api/services/{unit}/{action}"))
 		return
 	}
+	if !s.serviceAllowedForProfile(parts[0]) {
+		writeError(w, errors.New("service is not editable for selected profile"))
+		return
+	}
 	if parts[0] == "wfb-web-rtsp" {
 		s.handleRTSPAction(w, parts[1])
+		return
+	}
+	if parts[0] == "wfb-web-camera" {
+		s.handleCameraAction(w, parts[1])
 		return
 	}
 	unit, ok := service.AllowedUnit(parts[0])
@@ -194,6 +209,12 @@ func (s *Server) postService(w http.ResponseWriter, r *http.Request) {
 	}
 	if isSystemdRTSPUnit(unit) && (parts[1] == "start" || parts[1] == "restart") {
 		if err := s.rtsp.Stop(); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	if isSystemdCameraUnit(unit) && (parts[1] == "start" || parts[1] == "restart") {
+		if err := s.camera.Stop(); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -209,6 +230,77 @@ func (s *Server) postService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, states[0])
+}
+
+func (s *Server) serviceAllowedForProfile(key string) bool {
+	s.mu.RLock()
+	profileName := s.profile.Profile
+	s.mu.RUnlock()
+	switch profileName {
+	case "drone":
+		switch key {
+		case "wifibroadcast-gs", "rtsp-h265", "rtsp-h264", "wfb-web-rtsp":
+			return false
+		}
+	case "gs":
+		switch key {
+		case "wifibroadcast-drone", "fpv-camera", "wfb-web-camera":
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) getCamera(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.cameraStatus())
+}
+
+func (s *Server) postCamera(w http.ResponseWriter, r *http.Request) {
+	action := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/camera/"), "/")
+	s.handleCameraAction(w, action)
+}
+
+func (s *Server) handleCameraAction(w http.ResponseWriter, action string) {
+	opts := s.cameraOptions()
+	var err error
+	switch action {
+	case "start":
+		err = s.camera.Start(opts)
+	case "stop":
+		err = s.camera.Stop()
+	case "restart":
+		err = s.camera.Restart(opts)
+	default:
+		err = errors.New("unsupported camera action")
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.cameraStatus())
+}
+
+func (s *Server) cameraStatus() camera.State {
+	return s.camera.Status(s.cameraOptions())
+}
+
+func (s *Server) cameraOptions() camera.Options {
+	cfg, _ := config.LoadWithMaster(s.masterPath, s.cfgPath, s.defaultPath)
+	return camera.Options{
+		Enabled:   cfg.Default.CameraEnabled,
+		Source:    cfg.Default.CameraSource,
+		Device:    cfg.Default.CameraDevice,
+		RTSPURL:   cfg.Default.CameraRTSPURL,
+		Codec:     cfg.Default.CameraCodec,
+		Host:      cfg.Default.CameraHost,
+		Port:      cfg.Default.CameraPort,
+		Width:     cfg.Default.CameraWidth,
+		Height:    cfg.Default.CameraHeight,
+		Framerate: cfg.Default.CameraFramerate,
+		Bitrate:   cfg.Default.CameraBitrate,
+		MTU:       cfg.Default.CameraMTU,
+		Pattern:   cfg.Default.CameraTestPattern,
+	}
 }
 
 func (s *Server) getRTSP(w http.ResponseWriter, r *http.Request) {
@@ -247,7 +339,7 @@ func (s *Server) rtspStatus() rtsp.State {
 func (s *Server) rtspOptions() rtsp.Options {
 	cfg, _ := config.LoadWithMaster(s.masterPath, s.cfgPath, s.defaultPath)
 	return rtsp.Options{
-		Codec:   s.rtspCodec,
+		Codec:   cfg.Default.RTSPCodec,
 		MTU:     cfg.Default.RTPMTU,
 		Port:    cfg.Default.RTSPPort,
 		URI:     cfg.Default.RTSPURI,
@@ -285,7 +377,38 @@ func (s *Server) reconcileRTSP() error {
 	return s.rtsp.Stop()
 }
 
+func (s *Server) reconcileCamera() error {
+	cfg, err := config.LoadWithMaster(s.masterPath, s.cfgPath, s.defaultPath)
+	if err != nil {
+		return err
+	}
+	systemdStates, err := service.Status("fpv-camera.service")
+	if err != nil {
+		return err
+	}
+	systemdActive := len(systemdStates) > 0 && systemdStates[0].Active == "active"
+	if cfg.Default.CameraEnabled && !systemdActive {
+		return s.camera.Start(s.cameraOptions())
+	}
+	return s.camera.Stop()
+}
+
 func rtspServiceState(state rtsp.State) service.State {
+	sub := state.Sub
+	if state.Error != "" {
+		sub = state.Error
+	}
+	return service.State{
+		Unit:      state.Unit,
+		Active:    state.Active,
+		Sub:       sub,
+		Load:      state.Load,
+		UnitFile:  state.UnitFile,
+		CanReload: state.CanReload,
+	}
+}
+
+func cameraServiceState(state camera.State) service.State {
 	sub := state.Sub
 	if state.Error != "" {
 		sub = state.Error
@@ -302,6 +425,10 @@ func rtspServiceState(state rtsp.State) service.State {
 
 func isSystemdRTSPUnit(unit string) bool {
 	return strings.HasPrefix(unit, "rtsp@")
+}
+
+func isSystemdCameraUnit(unit string) bool {
+	return unit == "fpv-camera.service"
 }
 
 func (s *Server) streamStats(w http.ResponseWriter, r *http.Request) {

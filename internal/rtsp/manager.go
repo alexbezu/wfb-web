@@ -153,7 +153,7 @@ func (o Options) withDefaults() Options {
 
 func (o Options) validate() error {
 	if o.Codec != "h264" && o.Codec != "h265" {
-		return errors.New("codec must be h264 or h265")
+		return errors.New("codec must be h264 or h265, but " + o.Codec)
 	}
 	if o.MTU <= 0 || o.Port <= 0 || o.RTPPort <= 0 {
 		return errors.New("mtu, rtsp port, and rtp port must be positive")

@@ -15,9 +15,8 @@ func main() {
 	defaultPath := env("WFB_WEB_DEFAULT", "/etc/default/wifibroadcast")
 	masterPath := env("WFB_WEB_MASTER_CFG", "")
 	defaultProfile := env("WFB_WEB_PROFILE", "auto")
-	rtspCodec := env("WFB_WEB_RTSP_CODEC", "h265")
 
-	server := app.NewServer(cfgPath, defaultPath, masterPath, defaultProfile, rtspCodec)
+	server := app.NewServer(cfgPath, defaultPath, masterPath, defaultProfile)
 	server.ReconcileRuntime()
 
 	mux := http.NewServeMux()
