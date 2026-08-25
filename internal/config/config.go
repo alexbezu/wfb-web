@@ -36,6 +36,7 @@ type GSVideoConfig struct {
 }
 
 type DefaultConfig struct {
+	AutoServices      bool   `json:"auto_services"`
 	WFBNics           string `json:"wfb_nics"`
 	RTPMTU            int    `json:"rtp_mtu"`
 	RTPJitter         int    `json:"rtp_jitter"`
@@ -93,6 +94,7 @@ func Defaults() Config {
 		Base:    BaseConfig{LDPC: 0, STBC: 0, Bandwith: 20, MCSIndex: 1, ForceVHT: false},
 		GSVideo: GSVideoConfig{Peer: "connect://127.0.0.1:5600"},
 		Default: DefaultConfig{
+			AutoServices:      false,
 			WFBNics:           "wlan0",
 			RTPMTU:            1400,
 			RTPJitter:         0,
@@ -237,6 +239,8 @@ func loadDefault(path string, cfg *Config) error {
 		}
 		value = stringValue(strings.TrimSpace(value))
 		switch strings.TrimSpace(key) {
+		case "WFB_WEB_AUTO_SERVICES":
+			cfg.Default.AutoServices = boolValue(value, cfg.Default.AutoServices)
 		case "WFB_NICS":
 			cfg.Default.WFBNics = value
 		case "RTP_MTU":
@@ -281,7 +285,7 @@ func loadDefault(path string, cfg *Config) error {
 }
 
 func renderINI(c Config) []byte {
-	return []byte(fmt.Sprintf(`[common]
+	return fmt.Appendf(nil, `[common]
 wifi_channel = %d
 wifi_region = %q
 link_domain = %q
@@ -297,11 +301,12 @@ force_vht = %s
 peer = %q
 `, c.Common.WiFiChannel, c.Common.WiFiRegion, c.Common.LinkDomain,
 		c.Base.LDPC, c.Base.STBC, c.Base.Bandwith, c.Base.MCSIndex, pythonBool(c.Base.ForceVHT),
-		c.GSVideo.Peer))
+		c.GSVideo.Peer)
 }
 
 func renderDefault(c Config) []byte {
-	return []byte(fmt.Sprintf(`WFB_NICS=%q
+	return fmt.Appendf(nil, `WFB_WEB_AUTO_SERVICES=%s
+WFB_NICS=%s # radio interfaces
 
 RTP_MTU=%d
 RTP_JITTER=%d
@@ -321,10 +326,10 @@ WFB_WEB_CAMERA_FRAMERATE=%d
 WFB_WEB_CAMERA_BITRATE=%d
 WFB_WEB_CAMERA_MTU=%d
 WFB_WEB_CAMERA_TEST_PATTERN=%q
-`, c.Default.WFBNics, c.Default.RTPMTU, c.Default.RTPJitter, c.Default.RTSPPort, c.Default.RTSPURI, c.Default.RTSPCodec,
+`, shellBool(c.Default.AutoServices), formatWFBNics(c.Default.WFBNics), c.Default.RTPMTU, c.Default.RTPJitter, c.Default.RTSPPort, c.Default.RTSPURI, c.Default.RTSPCodec,
 		shellBool(c.Default.CameraEnabled), c.Default.CameraSource, c.Default.CameraDevice, c.Default.CameraRTSPURL, c.Default.CameraCodec, c.Default.CameraHost,
 		c.Default.CameraPort, c.Default.CameraWidth, c.Default.CameraHeight, c.Default.CameraFramerate, c.Default.CameraBitrate,
-		c.Default.CameraMTU, c.Default.CameraTestPattern))
+		c.Default.CameraMTU, c.Default.CameraTestPattern)
 }
 
 func writeFileWithBackup(path string, data []byte) error {

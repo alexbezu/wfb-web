@@ -103,7 +103,8 @@ func SaveDiff(masterPath, cfgPath, defaultPath string, cfg Config) error {
 		{Section: "base", Key: "mcs_index", Value: fmt.Sprint(cfg.Base.MCSIndex)},
 		{Section: "base", Key: "force_vht", Value: pythonBool(cfg.Base.ForceVHT)},
 		{Section: "gs_video", Key: "peer", Value: quotePythonString(cfg.GSVideo.Peer)},
-		{Section: "default", Key: "WFB_NICS", Value: quoteShellString(cfg.Default.WFBNics)},
+		{Section: "default", Key: "WFB_WEB_AUTO_SERVICES", Value: shellBool(cfg.Default.AutoServices)},
+		{Section: "default", Key: "WFB_NICS", Value: formatWFBNics(cfg.Default.WFBNics)},
 		{Section: "default", Key: "RTP_MTU", Value: fmt.Sprint(cfg.Default.RTPMTU)},
 		{Section: "default", Key: "RTP_JITTER", Value: fmt.Sprint(cfg.Default.RTPJitter)},
 		{Section: "default", Key: "RTSP_PORT", Value: fmt.Sprint(cfg.Default.RTSPPort)},
@@ -263,14 +264,16 @@ func renderDiffDoc(master, local parsedDoc, values map[string]parsedParam) []byt
 
 func renderDefaultDiff(defaults, local parsedDoc, values map[string]parsedParam) []byte {
 	var b strings.Builder
-	b.WriteString("# Local wfb-web environment overrides. Values equal to built-in defaults are omitted.\n")
 	for _, id := range appendMissing(defaults.order, local.order) {
 		p, ok := values[id]
 		if !ok {
 			continue
 		}
+		if p.section == "default" && p.key == "WFB_NICS" {
+			p.value = formatWFBNics(p.value)
+		}
 		base, hasBase := defaults.params[id]
-		if hasBase && sameValue(p.value, base.value) {
+		if hasBase && sameValue(p.value, base.value) && !alwaysWriteDefaultParam(p.key) {
 			continue
 		}
 		commentSource := p
@@ -278,6 +281,14 @@ func renderDefaultDiff(defaults, local parsedDoc, values map[string]parsedParam)
 			commentSource = localParam
 		} else if hasBase {
 			commentSource = base
+		}
+		if hasBase {
+			if len(commentSource.leadingComment) == 0 {
+				commentSource.leadingComment = base.leadingComment
+			}
+			if commentSource.inlineComment == "" {
+				commentSource.inlineComment = base.inlineComment
+			}
 		}
 		for _, line := range commentSource.leadingComment {
 			b.WriteString(line)
@@ -391,7 +402,8 @@ func parseConfigScanner(scanner *bufio.Scanner, shell bool) parsedDoc {
 func defaultParamDoc() parsedDoc {
 	doc := parsedDoc{params: map[string]parsedParam{}}
 	for _, p := range []parsedParam{
-		{section: "default", key: "WFB_NICS", value: quoteShellString(Defaults().Default.WFBNics), inlineComment: "# radio interfaces"},
+		{section: "default", key: "WFB_WEB_AUTO_SERVICES", value: shellBool(Defaults().Default.AutoServices), inlineComment: "# auto-start/stop native wfb-web runtime services"},
+		{section: "default", key: "WFB_NICS", value: Defaults().Default.WFBNics, inlineComment: "# radio interfaces"},
 		{section: "default", key: "RTP_MTU", value: fmt.Sprint(Defaults().Default.RTPMTU)},
 		{section: "default", key: "RTP_JITTER", value: fmt.Sprint(Defaults().Default.RTPJitter)},
 		{section: "default", key: "RTSP_PORT", value: fmt.Sprint(Defaults().Default.RTSPPort)},
@@ -482,10 +494,37 @@ func displayParamValue(p parsedParam) string {
 
 func storeParamValue(section, key, value string) string {
 	value = strings.TrimSpace(value)
+	if section == "default" && key == "WFB_NICS" {
+		return formatWFBNics(value)
+	}
 	if section == "default" && isShellStringParam(key) {
 		return quoteShellString(stringValue(value))
 	}
 	return value
+}
+
+func formatWFBNics(value string) string {
+	value = strings.TrimSpace(stringValue(value))
+	if value == "" {
+		value = Defaults().Default.WFBNics
+	}
+	if shellNeedsQuotes(value) {
+		return quoteShellString(value)
+	}
+	return value
+}
+
+func alwaysWriteDefaultParam(key string) bool {
+	switch key {
+	case "WFB_NICS", "RTP_MTU", "RTSP_PORT", "RTSP_URI", "RTP_JITTER":
+		return true
+	default:
+		return false
+	}
+}
+
+func shellNeedsQuotes(value string) bool {
+	return strings.ContainsAny(value, " \t\n\"'$`\\#")
 }
 
 func isShellStringParam(key string) bool {

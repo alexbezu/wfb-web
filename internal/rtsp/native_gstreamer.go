@@ -71,7 +71,7 @@ static void wfbweb_rtsp_stop(void) {
 import "C"
 
 import (
-	"errors"
+	"fmt"
 	"strconv"
 	"unsafe"
 )
@@ -92,7 +92,7 @@ func runNative(opts Options) error {
 	defer C.free(unsafe.Pointer(port))
 
 	if rc := C.wfbweb_rtsp_run(C.int(mode), C.int(opts.MTU), C.int(opts.Latency), uri, port, C.int(opts.RTPPort)); rc != 0 {
-		return errors.New("failed to attach GStreamer RTSP server")
+		return fmt.Errorf("failed to attach GStreamer RTSP server on port %d; check whether another RTSP server is already listening", opts.Port)
 	}
 	return nil
 }

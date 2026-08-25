@@ -5,6 +5,7 @@ type Config = {
   base: { ldpc: number; stbc: number; bandwidth: number; mcs_index: number; force_vht: boolean };
   gs_video: { peer: string };
   default: {
+    auto_services: boolean;
     wfb_nics: string; rtp_mtu: number; rtp_jitter: number; rtsp_port: number; rtsp_uri: string; rtsp_codec: string;
     camera_enabled: boolean; camera_source: string; camera_device: string; camera_rtsp_url: string; camera_codec: string; camera_host: string; camera_port: number;
     camera_width: number; camera_height: number; camera_framerate: number; camera_bitrate: number; camera_mtu: number; camera_test_pattern: string;
@@ -591,6 +592,7 @@ function renderConfig(): HTMLElement {
 
 function renderStandardConfig(): HTMLElement {
   const standard = [
+    ["default", "WFB_WEB_AUTO_SERVICES", "Auto Services"],
     ["common", "wifi_channel", "WiFi Channel"],
     ["common", "wifi_region", "WiFi Region"],
     ["common", "wifi_txpower", "TX Power"],
@@ -627,6 +629,9 @@ function renderParamControl(label: string, fieldInfo: EffectiveField | null): HT
   if (!fieldInfo) {
     return el("label", {}, label, el("input", { disabled: "true", value: "-" }));
   }
+  if (isBooleanParam(fieldInfo)) {
+    return renderBooleanParamControl(label, fieldInfo);
+  }
   const id = fieldID(fieldInfo);
   const valueNow = configDrafts.get(id) ?? fieldInfo.value;
   const attrs: Record<string, string | ((event: Event) => void)> = {
@@ -636,6 +641,23 @@ function renderParamControl(label: string, fieldInfo: EffectiveField | null): HT
   return el("label", { class: isFieldChanged(fieldInfo) ? "changed" : "" },
     label,
     el("input", attrs),
+    el("small", {}, fieldInfo.comment || `default: ${fieldInfo.default_value || "-"}`)
+  );
+}
+
+function renderBooleanParamControl(label: string, fieldInfo: EffectiveField): HTMLElement {
+  const id = fieldID(fieldInfo);
+  const valueNow = configDrafts.get(id) ?? fieldInfo.value;
+  return el("label", { class: isFieldChanged(fieldInfo) ? "changed inline-toggle" : "inline-toggle" },
+    el("input", {
+      type: "checkbox",
+      checked: String(parseBool(valueNow)),
+      onChange: (event: Event) => {
+        setConfigDraft(fieldInfo, (event.target as HTMLInputElement).checked ? "true" : "false");
+        render();
+      }
+    }),
+    label,
     el("small", {}, fieldInfo.comment || `default: ${fieldInfo.default_value || "-"}`)
   );
 }
@@ -759,6 +781,16 @@ function setConfigDraft(fieldInfo: EffectiveField, valueNow: string): void {
 function isFieldChanged(fieldInfo: EffectiveField): boolean {
   const valueNow = configDrafts.get(fieldID(fieldInfo)) ?? fieldInfo.value;
   return Boolean(fieldInfo.default_value) && normalizeParamValue(valueNow) !== normalizeParamValue(fieldInfo.default_value);
+}
+
+function isBooleanParam(fieldInfo: EffectiveField): boolean {
+  const valueNow = (configDrafts.get(fieldID(fieldInfo)) ?? fieldInfo.value).toLowerCase();
+  const defaultValue = fieldInfo.default_value.toLowerCase();
+  return ["true", "false"].includes(valueNow) || ["true", "false"].includes(defaultValue);
+}
+
+function parseBool(valueNow: string): boolean {
+  return valueNow.trim().toLowerCase() === "true";
 }
 
 function normalizeParamValue(valueNow: string): string {

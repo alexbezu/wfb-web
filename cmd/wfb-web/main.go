@@ -17,7 +17,6 @@ func main() {
 	defaultProfile := env("WFB_WEB_PROFILE", "auto")
 
 	server := app.NewServer(cfgPath, defaultPath, masterPath, defaultProfile)
-	server.ReconcileRuntime()
 
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)

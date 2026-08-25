@@ -194,3 +194,135 @@ func TestSaveParametersQuotesDefaultStrings(t *testing.T) {
 		t.Fatalf("codec should be shell-quoted:\n%s", got)
 	}
 }
+
+func TestSaveParametersKeepsDefaultWFBNics(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "wifibroadcast.cfg")
+	defaultPath := filepath.Join(dir, "wifibroadcast")
+
+	err := SaveParameters("", cfgPath, defaultPath, []ParameterUpdate{
+		{Section: "default", Key: "WFB_NICS", Value: "wlan0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "WFB_NICS=wlan0 # radio interfaces") {
+		t.Fatalf("default WFB_NICS should stay present and commented:\n%s", got)
+	}
+}
+
+func TestSaveParametersKeepsRequiredDefaultEnvLines(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "wifibroadcast.cfg")
+	defaultPath := filepath.Join(dir, "wifibroadcast")
+
+	err := SaveParameters("", cfgPath, defaultPath, []ParameterUpdate{
+		{Section: "default", Key: "WFB_WEB_CAMERA_ENABLED", Value: "false"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"WFB_NICS=wlan0 # radio interfaces",
+		"RTP_MTU=1400",
+		"RTSP_PORT=8554",
+		`RTSP_URI="/wfb"`,
+		"RTP_JITTER=0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("required default env line %q missing:\n%s", want, got)
+		}
+	}
+}
+
+func TestSaveParametersWritesSingleWFBNicUnquoted(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "wifibroadcast.cfg")
+	defaultPath := filepath.Join(dir, "wifibroadcast")
+
+	err := SaveParameters("", cfgPath, defaultPath, []ParameterUpdate{
+		{Section: "default", Key: "WFB_NICS", Value: "wlan1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "WFB_NICS=wlan1 # radio interfaces") {
+		t.Fatalf("single WFB_NICS should be unquoted and commented:\n%s", got)
+	}
+	if strings.Contains(got, `WFB_NICS="wlan1"`) {
+		t.Fatalf("single WFB_NICS should not be quoted:\n%s", got)
+	}
+}
+
+func TestSaveParametersFallsBackForEmptyWFBNics(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "wifibroadcast.cfg")
+	defaultPath := filepath.Join(dir, "wifibroadcast")
+
+	err := SaveParameters("", cfgPath, defaultPath, []ParameterUpdate{
+		{Section: "default", Key: "WFB_NICS", Value: ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if strings.Contains(got, "WFB_NICS= ") || strings.Contains(got, "WFB_NICS=\n") {
+		t.Fatalf("empty WFB_NICS should not be written:\n%s", got)
+	}
+	if !strings.Contains(got, "WFB_NICS=wlan0 # radio interfaces") {
+		t.Fatalf("empty WFB_NICS should fall back to wlan0:\n%s", got)
+	}
+}
+
+func TestSaveParametersNormalizesExistingWFBNics(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "wifibroadcast.cfg")
+	defaultPath := filepath.Join(dir, "wifibroadcast")
+
+	if err := os.WriteFile(defaultPath, []byte(`WFB_NICS="wlan0"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := SaveParameters("", cfgPath, defaultPath, []ParameterUpdate{
+		{Section: "default", Key: "RTP_MTU", Value: "1300"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "WFB_NICS=wlan0 # radio interfaces") {
+		t.Fatalf("existing default WFB_NICS should be normalized and commented:\n%s", got)
+	}
+	if strings.Contains(got, `WFB_NICS="wlan0"`) {
+		t.Fatalf("existing default WFB_NICS should not remain quoted:\n%s", got)
+	}
+}

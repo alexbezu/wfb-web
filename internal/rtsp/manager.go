@@ -101,10 +101,22 @@ func (m *Manager) Start(opts Options) error {
 		m.running = false
 		if err != nil {
 			m.lastErr = err.Error()
+		} else {
+			m.lastErr = "rtsp server exited"
 		}
 		m.mu.Unlock()
 	}()
 
+	select {
+	case <-done:
+		m.mu.Lock()
+		err := m.lastErr
+		m.mu.Unlock()
+		if err != "" {
+			return errors.New(err)
+		}
+	case <-time.After(350 * time.Millisecond):
+	}
 	return nil
 }
 

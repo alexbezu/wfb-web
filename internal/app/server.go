@@ -53,6 +53,14 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) ReconcileRuntime() {
+	cfg, err := config.LoadWithMaster(s.masterPath, s.cfgPath, s.defaultPath)
+	if err != nil {
+		log.Printf("runtime reconcile config load failed: %v", err)
+		return
+	}
+	if !cfg.Default.AutoServices {
+		return
+	}
 	if err := s.reconcileCamera(); err != nil {
 		log.Printf("camera reconcile failed: %v", err)
 	}
@@ -229,7 +237,6 @@ func (s *Server) postService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	s.ReconcileRuntime()
 	states, err := service.Status(unit)
 	if err != nil {
 		writeError(w, err)
