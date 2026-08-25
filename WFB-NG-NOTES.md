@@ -67,7 +67,7 @@ RTSP_URI="/wfb"
 Start simple video-only GS:
 
 ```sh
-sudo systemctl enable --now wifibroadcast@gs
+sudo systemctl enable --now wifibroadcast.service wifibroadcast@gs.service
 # or manually:
 sudo /usr/bin/wfb-server --profiles gs --wlans wlan0
 ```

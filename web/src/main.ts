@@ -517,7 +517,13 @@ function renderServiceRow(service: ServiceState): HTMLElement {
       el("div", { class: "row-actions" },
         el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "start") }, "Start"),
         el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "stop") }, "Stop"),
-        el("button", { class: "compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "restart") }, "Restart")
+        el("button", { class: "compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "restart") }, "Restart"),
+        supportsEnableDisable(key)
+          ? el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "enable") }, "Enable")
+          : "",
+        supportsEnableDisable(key)
+          ? el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "disable") }, "Disable")
+          : ""
       ),
       disabledReason ? el("small", { class: "muted" }, disabledReason) : ""
     ),
@@ -537,6 +543,10 @@ function serviceDisabledReason(key: string): string {
     return "Drone service disabled for ground-station profile";
   }
   return "";
+}
+
+function supportsEnableDisable(key: string): boolean {
+  return key !== "wfb-web-rtsp" && key !== "wfb-web-camera";
 }
 
 function serviceKey(unit: string): string {
@@ -592,7 +602,6 @@ function renderConfig(): HTMLElement {
 
 function renderStandardConfig(): HTMLElement {
   const standard = [
-    ["default", "WFB_WEB_AUTO_SERVICES", "Auto Services"],
     ["common", "wifi_channel", "WiFi Channel"],
     ["common", "wifi_region", "WiFi Region"],
     ["common", "wifi_txpower", "TX Power"],
