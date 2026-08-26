@@ -36,6 +36,7 @@ type GSVideoConfig struct {
 }
 
 type DefaultConfig struct {
+	Profile           string `json:"profile"`
 	AutoServices      bool   `json:"auto_services"`
 	WFBNics           string `json:"wfb_nics"`
 	RTPMTU            int    `json:"rtp_mtu"`
@@ -94,6 +95,7 @@ func Defaults() Config {
 		Base:    BaseConfig{LDPC: 0, STBC: 0, Bandwith: 20, MCSIndex: 1, ForceVHT: false},
 		GSVideo: GSVideoConfig{Peer: "connect://127.0.0.1:5600"},
 		Default: DefaultConfig{
+			Profile:           "",
 			AutoServices:      false,
 			WFBNics:           "wlan0",
 			RTPMTU:            1400,
@@ -142,6 +144,9 @@ func (c Config) Validate() error {
 	}
 	if c.Default.WFBNics == "" {
 		return errors.New("WFB_NICS is required")
+	}
+	if c.Default.Profile != "" && c.Default.Profile != "gs" && c.Default.Profile != "drone" {
+		return errors.New("WFB_WEB_PROFILE must be gs or drone")
 	}
 	if c.Default.RTPMTU <= 0 || c.Default.RTSPPort <= 0 {
 		return errors.New("RTP_MTU and RTSP_PORT must be positive")
@@ -239,6 +244,8 @@ func loadDefault(path string, cfg *Config) error {
 		}
 		value = stringValue(strings.TrimSpace(value))
 		switch strings.TrimSpace(key) {
+		case "WFB_WEB_PROFILE":
+			cfg.Default.Profile = value
 		case "WFB_WEB_AUTO_SERVICES":
 			cfg.Default.AutoServices = boolValue(value, cfg.Default.AutoServices)
 		case "WFB_NICS":
@@ -305,7 +312,11 @@ peer = %q
 }
 
 func renderDefault(c Config) []byte {
-	return fmt.Appendf(nil, `WFB_WEB_AUTO_SERVICES=%s
+	var b []byte
+	if c.Default.Profile != "" {
+		b = fmt.Appendf(b, "WFB_WEB_PROFILE=%s # saved wfb-web profile\n", c.Default.Profile)
+	}
+	return fmt.Appendf(b, `WFB_WEB_AUTO_SERVICES=%s
 WFB_NICS=%s # radio interfaces
 
 RTP_MTU=%d

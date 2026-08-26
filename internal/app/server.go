@@ -29,7 +29,8 @@ type Server struct {
 }
 
 func NewServer(cfgPath, defaultPath, masterPath, defaultProfile string) *Server {
-	selection := profile.Detect(defaultProfile)
+	cfg, _ := config.LoadWithMaster(masterPath, cfgPath, defaultPath)
+	selection := profile.Detect(cfg.Default.Profile, defaultProfile)
 	return &Server{cfgPath: cfgPath, defaultPath: defaultPath, masterPath: masterPath, profile: selection, camera: camera.NewManager(), rtsp: rtsp.NewManager()}
 }
 
@@ -94,7 +95,13 @@ func (s *Server) putProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("unsupported profile"))
 		return
 	}
-	selection := profile.Manual(req.Profile)
+	if err := config.SaveParameters(s.masterPath, s.cfgPath, s.defaultPath, []config.ParameterUpdate{
+		{Section: "default", Key: "WFB_WEB_PROFILE", Value: req.Profile},
+	}); err != nil {
+		writeError(w, err)
+		return
+	}
+	selection := profile.Saved(req.Profile)
 	s.mu.Lock()
 	s.profile = selection
 	s.mu.Unlock()

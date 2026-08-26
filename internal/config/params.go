@@ -103,6 +103,7 @@ func SaveDiff(masterPath, cfgPath, defaultPath string, cfg Config) error {
 		{Section: "base", Key: "mcs_index", Value: fmt.Sprint(cfg.Base.MCSIndex)},
 		{Section: "base", Key: "force_vht", Value: pythonBool(cfg.Base.ForceVHT)},
 		{Section: "gs_video", Key: "peer", Value: quotePythonString(cfg.GSVideo.Peer)},
+		{Section: "default", Key: "WFB_WEB_PROFILE", Value: formatWFBProfile(cfg.Default.Profile)},
 		{Section: "default", Key: "WFB_WEB_AUTO_SERVICES", Value: shellBool(cfg.Default.AutoServices)},
 		{Section: "default", Key: "WFB_NICS", Value: formatWFBNics(cfg.Default.WFBNics)},
 		{Section: "default", Key: "RTP_MTU", Value: fmt.Sprint(cfg.Default.RTPMTU)},
@@ -272,6 +273,9 @@ func renderDefaultDiff(defaults, local parsedDoc, values map[string]parsedParam)
 		if p.section == "default" && p.key == "WFB_NICS" {
 			p.value = formatWFBNics(p.value)
 		}
+		if p.section == "default" && p.key == "WFB_WEB_PROFILE" {
+			p.value = formatWFBProfile(p.value)
+		}
 		base, hasBase := defaults.params[id]
 		if hasBase && sameValue(p.value, base.value) && !alwaysWriteDefaultParam(p.key) {
 			continue
@@ -402,6 +406,7 @@ func parseConfigScanner(scanner *bufio.Scanner, shell bool) parsedDoc {
 func defaultParamDoc() parsedDoc {
 	doc := parsedDoc{params: map[string]parsedParam{}}
 	for _, p := range []parsedParam{
+		{section: "default", key: "WFB_WEB_PROFILE", value: Defaults().Default.Profile, inlineComment: "# saved wfb-web profile"},
 		{section: "default", key: "WFB_WEB_AUTO_SERVICES", value: shellBool(Defaults().Default.AutoServices), inlineComment: "# auto-start/stop native wfb-web runtime services"},
 		{section: "default", key: "WFB_NICS", value: Defaults().Default.WFBNics, inlineComment: "# radio interfaces"},
 		{section: "default", key: "RTP_MTU", value: fmt.Sprint(Defaults().Default.RTPMTU)},
@@ -497,6 +502,9 @@ func storeParamValue(section, key, value string) string {
 	if section == "default" && key == "WFB_NICS" {
 		return formatWFBNics(value)
 	}
+	if section == "default" && key == "WFB_WEB_PROFILE" {
+		return formatWFBProfile(value)
+	}
 	if section == "default" && isShellStringParam(key) {
 		return quoteShellString(stringValue(value))
 	}
@@ -510,6 +518,14 @@ func formatWFBNics(value string) string {
 	}
 	if shellNeedsQuotes(value) {
 		return quoteShellString(value)
+	}
+	return value
+}
+
+func formatWFBProfile(value string) string {
+	value = strings.TrimSpace(stringValue(value))
+	if value != "gs" && value != "drone" {
+		return ""
 	}
 	return value
 }

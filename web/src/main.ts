@@ -5,6 +5,7 @@ type Config = {
   base: { ldpc: number; stbc: number; bandwidth: number; mcs_index: number; force_vht: boolean };
   gs_video: { peer: string };
   default: {
+    profile: string;
     auto_services: boolean;
     wfb_nics: string; rtp_mtu: number; rtp_jitter: number; rtsp_port: number; rtsp_uri: string; rtsp_codec: string;
     camera_enabled: boolean; camera_source: string; camera_device: string; camera_rtsp_url: string; camera_codec: string; camera_host: string; camera_port: number;
@@ -602,6 +603,7 @@ function renderConfig(): HTMLElement {
 
 function renderStandardConfig(): HTMLElement {
   const standard = [
+    ["default", "WFB_WEB_PROFILE", "Saved Profile"],
     ["common", "wifi_channel", "WiFi Channel"],
     ["common", "wifi_region", "WiFi Region"],
     ["common", "wifi_txpower", "TX Power"],
@@ -613,17 +615,11 @@ function renderStandardConfig(): HTMLElement {
     ["base", "force_vht", "Force VHT"],
     ["gs_video", "peer", "GS Video Peer"],
     ["default", "WFB_NICS", "WFB NICS"],
-    ["default", "RTP_MTU", "RTP MTU"],
-    ["default", "RTP_JITTER", "RTP Jitter"],
-    ["default", "RTSP_PORT", "RTSP Port"],
-    ["default", "RTSP_URI", "RTSP URI"],
-    ["default", "WFB_WEB_RTSP_CODEC", "RTSP Codec"],
+    ["default", "WFB_WEB_RTSP_CODEC", "gs RTSP Codec"],
     ["default", "WFB_WEB_CAMERA_ENABLED", "Camera Enabled"],
     ["default", "WFB_WEB_CAMERA_SOURCE", "Camera Source"],
     ["default", "WFB_WEB_CAMERA_RTSP_URL", "Camera RTSP URL"],
-    ["default", "WFB_WEB_CAMERA_CODEC", "Camera Codec"],
-    ["default", "WFB_WEB_CAMERA_PORT", "Camera RTP Port"],
-    ["default", "WFB_WEB_CAMERA_DEVICE", "Camera Device"]
+    ["default", "WFB_WEB_CAMERA_CODEC", "Camera Codec"]
   ];
   return el("section", { class: "config-section" },
     el("h3", {}, "Standard"),

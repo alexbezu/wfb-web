@@ -30,7 +30,8 @@ peer = 'connect://239.50.50.50:5600'
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(defaultPath, []byte(`WFB_NICS="wlan0 wlan1"
+	if err := os.WriteFile(defaultPath, []byte(`WFB_WEB_PROFILE=drone
+WFB_NICS="wlan0 wlan1"
 RTP_MTU=1300
 RTP_JITTER=10
 RTSP_PORT=8555
@@ -54,7 +55,7 @@ WFB_WEB_RTSP_CODEC="h264" # wfb-web native RTSP codec
 	if cfg.GSVideo.Peer != "connect://239.50.50.50:5600" {
 		t.Fatalf("unexpected peer: %s", cfg.GSVideo.Peer)
 	}
-	if cfg.Default.WFBNics != "wlan0 wlan1" || cfg.Default.RTSPURI != "/live" {
+	if cfg.Default.Profile != "drone" || cfg.Default.WFBNics != "wlan0 wlan1" || cfg.Default.RTSPURI != "/live" {
 		t.Fatalf("unexpected default config: %+v", cfg.Default)
 	}
 	if cfg.Default.RTSPCodec != "h264" {
@@ -192,6 +193,28 @@ func TestSaveParametersQuotesDefaultStrings(t *testing.T) {
 	got := string(data)
 	if !strings.Contains(got, `WFB_WEB_RTSP_CODEC="h264"`) {
 		t.Fatalf("codec should be shell-quoted:\n%s", got)
+	}
+}
+
+func TestSaveParametersWritesSavedProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "wifibroadcast.cfg")
+	defaultPath := filepath.Join(dir, "wifibroadcast")
+
+	err := SaveParameters("", cfgPath, defaultPath, []ParameterUpdate{
+		{Section: "default", Key: "WFB_WEB_PROFILE", Value: "drone"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "WFB_WEB_PROFILE=drone # saved wfb-web profile") {
+		t.Fatalf("saved profile should be written unquoted with comment:\n%s", got)
 	}
 }
 
