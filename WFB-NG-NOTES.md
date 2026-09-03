@@ -6,7 +6,8 @@
 
 ```sh
 curl -o install_gs.sh https://raw.githubusercontent.com/svpcom/wfb-ng/refs/heads/master/scripts/install_gs.sh
-sudo bash ./install_gs.sh
+iw dev
+sudo bash ./install_gs.sh wlan0
 ```
 
 Or install from the sources (after git clone):

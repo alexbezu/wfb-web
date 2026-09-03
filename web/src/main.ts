@@ -602,6 +602,7 @@ function renderConfig(): HTMLElement {
 }
 
 function renderStandardConfig(): HTMLElement {
+  const selectedProfile = profileSelection?.profile ?? "gs";
   const standard = [
     ["default", "WFB_WEB_PROFILE", "Saved Profile"],
     ["common", "wifi_channel", "WiFi Channel"],
@@ -613,14 +614,22 @@ function renderStandardConfig(): HTMLElement {
     ["base", "ldpc", "LDPC"],
     ["base", "stbc", "STBC"],
     ["base", "force_vht", "Force VHT"],
-    ["gs_video", "peer", "GS Video Peer"],
-    ["default", "WFB_NICS", "WFB NICS"],
-    ["default", "WFB_WEB_RTSP_CODEC", "gs RTSP Codec"],
+    ["default", "WFB_NICS", "WFB NICS"]
+  ];
+  if (selectedProfile === "gs") {
+    standard.push(
+      ["gs_video", "peer", "GS Video Peer"],
+      ["default", "WFB_WEB_RTSP_CODEC", "GS RTSP Codec"]
+    );
+  }
+  if (selectedProfile === "drone") {
+    standard.push(
     ["default", "WFB_WEB_CAMERA_ENABLED", "Camera Enabled"],
     ["default", "WFB_WEB_CAMERA_SOURCE", "Camera Source"],
     ["default", "WFB_WEB_CAMERA_RTSP_URL", "Camera RTSP URL"],
     ["default", "WFB_WEB_CAMERA_CODEC", "Camera Codec"]
-  ];
+    );
+  }
   return el("section", { class: "config-section" },
     el("h3", {}, "Standard"),
     el("div", { class: "standard-grid" }, ...standard.map(([section, key, label]) => {
