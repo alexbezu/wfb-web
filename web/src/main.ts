@@ -126,6 +126,15 @@ type WFBStatsEvent = {
   rf_temperature?: Record<string, number>;
 };
 
+type VideoHealthSample = {
+  time: number;
+  snrAvg: number | null;
+  rxPackets: number | null;
+  dropRate: number | null;
+  latencyAvg: number | null;
+  txWlan: number | null;
+};
+
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) {
   throw new Error("missing app element");
@@ -153,6 +162,9 @@ let configChangedOnly = false;
 let configDrafts = new Map<string, string>();
 let copiedEndpoint = "";
 let multicastIface = "eth0";
+let videoHealthHistory: VideoHealthSample[] = [];
+let previousTxTotals: { sent: number; drop: number } | null = null;
+const maxVideoHealthSamples = 90;
 
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -667,7 +679,7 @@ function renderBooleanParamControl(label: string, fieldInfo: EffectiveField): HT
       type: "checkbox",
       checked: String(parseBool(valueNow)),
       onChange: (event: Event) => {
-        setConfigDraft(fieldInfo, (event.target as HTMLInputElement).checked ? "true" : "false");
+        setConfigDraft(fieldInfo, formatBooleanParam(fieldInfo, (event.target as HTMLInputElement).checked));
         render();
       }
     }),
@@ -803,6 +815,13 @@ function isBooleanParam(fieldInfo: EffectiveField): boolean {
   return ["true", "false"].includes(valueNow) || ["true", "false"].includes(defaultValue);
 }
 
+function formatBooleanParam(fieldInfo: EffectiveField, checked: boolean): string {
+  if (fieldInfo.section !== "default") {
+    return checked ? "True" : "False";
+  }
+  return checked ? "true" : "false";
+}
+
 function parseBool(valueNow: string): boolean {
   return valueNow.trim().toLowerCase() === "true";
 }
@@ -873,6 +892,7 @@ function renderStats(): HTMLElement {
       statCard("WLANs", settingsEvent?.wlans?.join(", ") || config?.default.wfb_nics || "-", "configured radios"),
       statCard("TX WLAN", value(rxEvent?.tx_wlan), "selected antenna")
     ),
+    renderVideoHealth(),
     el("div", { class: "stats-layout" },
       renderRXStats(),
       renderTXStats()
@@ -883,6 +903,184 @@ function renderStats(): HTMLElement {
 
 function statCard(label: string, main: string, hint: string): HTMLElement {
   return el("div", { class: "metric" }, el("span", {}, label), el("strong", {}, main), el("small", {}, hint));
+}
+
+function renderVideoHealth(): HTMLElement {
+  const latest = videoHealthHistory.at(-1) ?? currentVideoHealthSample(Date.now(), false);
+  return el("section", { class: "stat-section video-health" },
+    el("div", { class: "section-head" },
+      el("h3", {}, "Video Health"),
+      el("small", { class: "muted" }, `${videoHealthHistory.length} recent samples`)
+    ),
+    el("div", { class: "health-grid" },
+      healthCard("Packet loss", percent(latest.dropRate), lossHint(latest.dropRate), latest.dropRate, renderSparkline("dropRate", { min: 0, max: Math.max(10, maxHistory("dropRate") ?? 10), invert: true, suffix: "%" })),
+      healthCard("SNR", formatNumber(latest.snrAvg, " dB"), thresholdHint(latest.snrAvg, 12, 20, "higher is better"), latest.snrAvg, renderSparkline("snrAvg", { min: 0, max: Math.max(35, maxHistory("snrAvg") ?? 35) })),
+      healthCard("Latency", formatNumber(latest.latencyAvg, " ms"), thresholdHint(latest.latencyAvg, 25, 10, "lower is better", true), latest.latencyAvg, renderSparkline("latencyAvg", { min: 0, max: Math.max(40, maxHistory("latencyAvg") ?? 40), invert: true, suffix: "ms" })),
+      healthCard("RX packets", formatNumber(latest.rxPackets, " pkt/s"), "watch for sudden dips", latest.rxPackets, renderSparkline("rxPackets", { min: 0, max: Math.max(1, maxHistory("rxPackets") ?? 1) })),
+      healthCard("TX WLAN", value(latest.txWlan), "selected antenna timeline", latest.txWlan, renderStepLine("txWlan"))
+    )
+  );
+}
+
+function healthCard(label: string, main: string, hint: string, raw: number | null, chart: SVGElement): HTMLElement {
+  return el("div", { class: `health-card ${healthState(label, raw)}` },
+    el("span", {}, label),
+    el("strong", {}, main),
+    chart,
+    el("small", {}, hint)
+  );
+}
+
+function healthState(label: string, value: number | null): string {
+  if (value === null) {
+    return "unknown";
+  }
+  if (label === "Packet loss") {
+    return value >= 5 ? "bad" : value >= 1 ? "warn" : "good";
+  }
+  if (label === "SNR") {
+    return value < 12 ? "bad" : value < 20 ? "warn" : "good";
+  }
+  if (label === "Latency") {
+    return value > 25 ? "bad" : value > 10 ? "warn" : "good";
+  }
+  return "neutral";
+}
+
+function renderSparkline(key: keyof VideoHealthSample, options: { min: number; max: number; invert?: boolean; suffix?: string }): SVGElement {
+  const points = historyPoints(key, options.min, options.max);
+  const label = latestLabel(key, options.suffix ?? "");
+  return sparklineSvg(points, options.invert ? "sparkline warn-line" : "sparkline", label);
+}
+
+function renderStepLine(key: keyof VideoHealthSample): SVGElement {
+  const numericValues = videoHealthHistory.map((sample) => sample[key]).filter(isNumber);
+  const min = Math.min(...numericValues, 0);
+  const max = Math.max(...numericValues, 1);
+  return sparklineSvg(historyPoints(key, min, max), "sparkline step-line", latestLabel(key, ""));
+}
+
+function sparklineSvg(points: string, className: string, label: string): SVGElement {
+  return svg("svg", { class: className, viewBox: "0 0 100 32", preserveAspectRatio: "none", role: "img", "aria-label": label },
+    svg("polyline", { points })
+  );
+}
+
+function historyPoints(key: keyof VideoHealthSample, min: number, max: number): string {
+  const rangeValue = Math.max(max - min, 1);
+  const samples = videoHealthHistory.length ? videoHealthHistory : [currentVideoHealthSample(Date.now(), false)];
+  return samples.map((sample, index) => {
+    const raw = sample[key];
+    const val = typeof raw === "number" ? raw : min;
+    const x = samples.length === 1 ? 100 : (index / (samples.length - 1)) * 100;
+    const y = 30 - ((Math.min(Math.max(val, min), max) - min) / rangeValue) * 28;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+}
+
+function latestLabel(key: keyof VideoHealthSample, suffix: string): string {
+  const latest = videoHealthHistory.at(-1);
+  const value = latest?.[key];
+  return typeof value === "number" ? `${key}: ${value.toFixed(1)}${suffix}` : `${key}: no data`;
+}
+
+function maxHistory(key: keyof VideoHealthSample): number | null {
+  const values = videoHealthHistory.map((sample) => sample[key]).filter(isNumber);
+  return values.length ? Math.max(...values) : null;
+}
+
+function currentVideoHealthSample(time: number, updateTxDelta: boolean): VideoHealthSample {
+  const rxRows = rxEvent?.rx_ant_stats ?? [];
+  const txRows = txEvent?.tx_ant_stats ?? [];
+  const sent = sumNumbers(txRows.map((row) => row.pkt_sent));
+  const drop = sumNumbers(txRows.map((row) => row.pkt_drop));
+  return {
+    time,
+    snrAvg: average(rxRows.map((row) => row.snr_avg)),
+    rxPackets: sumNumbers(rxRows.map((row) => row.pkt_recv)),
+    dropRate: txDropRate(sent, drop, updateTxDelta),
+    latencyAvg: average(txRows.map((row) => row.lat_avg)),
+    txWlan: typeof rxEvent?.tx_wlan === "number" ? rxEvent.tx_wlan : null
+  };
+}
+
+function txDropRate(sent: number | null, drop: number | null, updateTxDelta: boolean): number | null {
+  if (sent === null || drop === null) {
+    return videoHealthHistory.at(-1)?.dropRate ?? null;
+  }
+  if (!updateTxDelta) {
+    return videoHealthHistory.at(-1)?.dropRate ?? totalDropRate(sent, drop);
+  }
+  const previous = previousTxTotals;
+  previousTxTotals = { sent, drop };
+  if (!previous || sent < previous.sent || drop < previous.drop) {
+    return totalDropRate(sent, drop);
+  }
+  return totalDropRate(sent - previous.sent, drop - previous.drop);
+}
+
+function totalDropRate(sent: number, drop: number): number | null {
+  const totalTxPackets = sent + drop;
+  return totalTxPackets > 0 ? (drop / totalTxPackets) * 100 : null;
+}
+
+function recordVideoHealthSample(updateTxDelta: boolean): void {
+  const sample = currentVideoHealthSample(Date.now(), updateTxDelta);
+  if (sample.snrAvg === null && sample.rxPackets === null && sample.dropRate === null && sample.latencyAvg === null && sample.txWlan === null) {
+    return;
+  }
+  videoHealthHistory = [...videoHealthHistory, sample].slice(-maxVideoHealthSamples);
+}
+
+function average(values: Array<number | undefined>): number | null {
+  const numericValues = values.filter(isNumber);
+  if (numericValues.length === 0) {
+    return null;
+  }
+  return numericValues.reduce((sum, item) => sum + item, 0) / numericValues.length;
+}
+
+function sumNumbers(values: Array<number | undefined>): number | null {
+  const numericValues = values.filter(isNumber);
+  if (numericValues.length === 0) {
+    return null;
+  }
+  return numericValues.reduce((sum, item) => sum + item, 0);
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function formatNumber(input: number | null, suffix: string): string {
+  return input === null ? "-" : `${input.toFixed(input >= 10 ? 0 : 1)}${suffix}`;
+}
+
+function percent(input: number | null): string {
+  return input === null ? "-" : `${input.toFixed(input >= 10 ? 0 : 1)}%`;
+}
+
+function lossHint(input: number | null): string {
+  if (input === null) {
+    return "waiting for TX counters";
+  }
+  if (input >= 5) {
+    return "likely visible artifacts";
+  }
+  if (input >= 1) {
+    return "possible corruption bursts";
+  }
+  return "clean packet path";
+}
+
+function thresholdHint(input: number | null, warn: number, good: number, base: string, lowerIsBetter = false): string {
+  if (input === null) {
+    return "waiting for samples";
+  }
+  if (lowerIsBetter) {
+    return input > warn ? "freeze risk" : input > good ? "watch for spikes" : base;
+  }
+  return input < warn ? "artifact risk" : input < good ? "watch for fades" : base;
 }
 
 function renderRXStats(): HTMLElement {
@@ -1031,11 +1229,32 @@ function applyStatsEvent(line: string): void {
       break;
     case "rx":
       rxEvent = event as WFBStatsEvent;
+      recordVideoHealthSample(false);
       break;
     case "tx":
       txEvent = event as WFBStatsEvent;
+      recordVideoHealthSample(true);
       break;
   }
+}
+
+function svg<K extends keyof SVGElementTagNameMap>(
+  tag: K,
+  attrs: Record<string, unknown> = {},
+  ...children: Array<Node | string>
+): SVGElementTagNameMap[K] {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") {
+      node.setAttribute("class", String(value));
+    } else {
+      node.setAttribute(key, String(value));
+    }
+  }
+  for (const child of children) {
+    node.append(child);
+  }
+  return node;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(

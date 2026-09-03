@@ -21,6 +21,7 @@ func main() {
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
 	frontend.RegisterRoutes(mux)
+	server.ReconcileRuntime()
 
 	log.Printf("wfb-web listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
