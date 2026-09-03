@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+CODEC="${CODEC:-h264}"
+HOST="${HOST:-127.0.0.1}"
+PORT="${PORT:-5602}"
+
+case "$CODEC" in
+  h264)
+    MODE="H264"
+    DEPAY="rtph264depay"
+    ;;
+  h265)
+    MODE="H265"
+    DEPAY="rtph265depay"
+    ;;
+  *)
+    echo "unsupported CODEC=$CODEC, expected h264 or h265" >&2
+    exit 2
+    ;;
+esac
+
+echo "Watching camera RTP $CODEC from udp://$HOST:$PORT"
+exec gst-launch-1.0 -v \
+  udpsrc address="$HOST" port="$PORT" caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=$MODE" \
+  ! "$DEPAY" \
+  ! decodebin \
+  ! autovideosink sync=false

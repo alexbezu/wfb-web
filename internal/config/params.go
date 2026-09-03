@@ -84,7 +84,7 @@ func SaveParameters(masterPath, cfgPath, defaultPath string, updates []Parameter
 			continue
 		}
 		key := strings.TrimSpace(update.Key)
-		envValues[paramID("default", key)] = parsedParam{section: "default", key: key, value: strings.TrimSpace(update.Value)}
+		envValues[paramID("default", key)] = parsedParam{section: "default", key: key, value: storeParamValue("default", key, update.Value)}
 	}
 	return writeFileWithBackup(defaultPath, renderDefaultDiff(defaults, env, envValues))
 }
@@ -103,11 +103,27 @@ func SaveDiff(masterPath, cfgPath, defaultPath string, cfg Config) error {
 		{Section: "base", Key: "mcs_index", Value: fmt.Sprint(cfg.Base.MCSIndex)},
 		{Section: "base", Key: "force_vht", Value: pythonBool(cfg.Base.ForceVHT)},
 		{Section: "gs_video", Key: "peer", Value: quotePythonString(cfg.GSVideo.Peer)},
-		{Section: "default", Key: "WFB_NICS", Value: quoteShellString(cfg.Default.WFBNics)},
+		{Section: "default", Key: "WFB_WEB_PROFILE", Value: formatWFBProfile(cfg.Default.Profile)},
+		{Section: "default", Key: "WFB_WEB_AUTO_SERVICES", Value: shellBool(cfg.Default.AutoServices)},
+		{Section: "default", Key: "WFB_NICS", Value: formatWFBNics(cfg.Default.WFBNics)},
 		{Section: "default", Key: "RTP_MTU", Value: fmt.Sprint(cfg.Default.RTPMTU)},
 		{Section: "default", Key: "RTP_JITTER", Value: fmt.Sprint(cfg.Default.RTPJitter)},
 		{Section: "default", Key: "RTSP_PORT", Value: fmt.Sprint(cfg.Default.RTSPPort)},
 		{Section: "default", Key: "RTSP_URI", Value: quoteShellString(cfg.Default.RTSPURI)},
+		{Section: "default", Key: "WFB_WEB_RTSP_CODEC", Value: quoteShellString(cfg.Default.RTSPCodec)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_ENABLED", Value: shellBool(cfg.Default.CameraEnabled)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_SOURCE", Value: quoteShellString(cfg.Default.CameraSource)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_DEVICE", Value: quoteShellString(cfg.Default.CameraDevice)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_RTSP_URL", Value: quoteShellString(cfg.Default.CameraRTSPURL)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_CODEC", Value: quoteShellString(cfg.Default.CameraCodec)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_HOST", Value: quoteShellString(cfg.Default.CameraHost)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_PORT", Value: fmt.Sprint(cfg.Default.CameraPort)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_WIDTH", Value: fmt.Sprint(cfg.Default.CameraWidth)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_HEIGHT", Value: fmt.Sprint(cfg.Default.CameraHeight)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_FRAMERATE", Value: fmt.Sprint(cfg.Default.CameraFramerate)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_BITRATE", Value: fmt.Sprint(cfg.Default.CameraBitrate)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_MTU", Value: fmt.Sprint(cfg.Default.CameraMTU)},
+		{Section: "default", Key: "WFB_WEB_CAMERA_TEST_PATTERN", Value: quoteShellString(cfg.Default.CameraTestPattern)},
 	}
 	return SaveParameters(masterPath, cfgPath, defaultPath, updates)
 }
@@ -144,7 +160,7 @@ func mergeDocs(master, local, defaults, env parsedDoc) []EffectiveConfigSection 
 		}
 		defaultValue := ""
 		if hasBase {
-			defaultValue = base.value
+			defaultValue = displayParamValue(base)
 		}
 		changed := hasBase && !sameValue(p.value, base.value)
 		if !hasBase {
@@ -153,7 +169,7 @@ func mergeDocs(master, local, defaults, env parsedDoc) []EffectiveConfigSection 
 		bySection[p.section] = append(bySection[p.section], EffectiveConfigField{
 			Section:      p.section,
 			Key:          p.key,
-			Value:        p.value,
+			Value:        displayParamValue(p),
 			DefaultValue: defaultValue,
 			Changed:      changed,
 			Default:      !changed,
@@ -249,14 +265,19 @@ func renderDiffDoc(master, local parsedDoc, values map[string]parsedParam) []byt
 
 func renderDefaultDiff(defaults, local parsedDoc, values map[string]parsedParam) []byte {
 	var b strings.Builder
-	b.WriteString("# Local wfb-web environment overrides. Values equal to built-in defaults are omitted.\n")
 	for _, id := range appendMissing(defaults.order, local.order) {
 		p, ok := values[id]
 		if !ok {
 			continue
 		}
+		if p.section == "default" && p.key == "WFB_NICS" {
+			p.value = formatWFBNics(p.value)
+		}
+		if p.section == "default" && p.key == "WFB_WEB_PROFILE" {
+			p.value = formatWFBProfile(p.value)
+		}
 		base, hasBase := defaults.params[id]
-		if hasBase && sameValue(p.value, base.value) {
+		if hasBase && sameValue(p.value, base.value) && !alwaysWriteDefaultParam(p.key) {
 			continue
 		}
 		commentSource := p
@@ -264,6 +285,14 @@ func renderDefaultDiff(defaults, local parsedDoc, values map[string]parsedParam)
 			commentSource = localParam
 		} else if hasBase {
 			commentSource = base
+		}
+		if hasBase {
+			if len(commentSource.leadingComment) == 0 {
+				commentSource.leadingComment = base.leadingComment
+			}
+			if commentSource.inlineComment == "" {
+				commentSource.inlineComment = base.inlineComment
+			}
 		}
 		for _, line := range commentSource.leadingComment {
 			b.WriteString(line)
@@ -377,11 +406,27 @@ func parseConfigScanner(scanner *bufio.Scanner, shell bool) parsedDoc {
 func defaultParamDoc() parsedDoc {
 	doc := parsedDoc{params: map[string]parsedParam{}}
 	for _, p := range []parsedParam{
-		{section: "default", key: "WFB_NICS", value: quoteShellString(Defaults().Default.WFBNics), inlineComment: "# radio interfaces"},
+		{section: "default", key: "WFB_WEB_PROFILE", value: Defaults().Default.Profile, inlineComment: "# saved wfb-web profile"},
+		{section: "default", key: "WFB_WEB_AUTO_SERVICES", value: shellBool(Defaults().Default.AutoServices), inlineComment: "# auto-start/stop native wfb-web runtime services"},
+		{section: "default", key: "WFB_NICS", value: Defaults().Default.WFBNics, inlineComment: "# radio interfaces"},
 		{section: "default", key: "RTP_MTU", value: fmt.Sprint(Defaults().Default.RTPMTU)},
 		{section: "default", key: "RTP_JITTER", value: fmt.Sprint(Defaults().Default.RTPJitter)},
 		{section: "default", key: "RTSP_PORT", value: fmt.Sprint(Defaults().Default.RTSPPort)},
 		{section: "default", key: "RTSP_URI", value: quoteShellString(Defaults().Default.RTSPURI)},
+		{section: "default", key: "WFB_WEB_RTSP_CODEC", value: quoteShellString(Defaults().Default.RTSPCodec), inlineComment: "# wfb-web native RTSP codec"},
+		{section: "default", key: "WFB_WEB_CAMERA_ENABLED", value: shellBool(Defaults().Default.CameraEnabled), inlineComment: "# wfb-web native camera pipeline"},
+		{section: "default", key: "WFB_WEB_CAMERA_SOURCE", value: quoteShellString(Defaults().Default.CameraSource)},
+		{section: "default", key: "WFB_WEB_CAMERA_DEVICE", value: quoteShellString(Defaults().Default.CameraDevice)},
+		{section: "default", key: "WFB_WEB_CAMERA_RTSP_URL", value: quoteShellString(Defaults().Default.CameraRTSPURL)},
+		{section: "default", key: "WFB_WEB_CAMERA_CODEC", value: quoteShellString(Defaults().Default.CameraCodec)},
+		{section: "default", key: "WFB_WEB_CAMERA_HOST", value: quoteShellString(Defaults().Default.CameraHost)},
+		{section: "default", key: "WFB_WEB_CAMERA_PORT", value: fmt.Sprint(Defaults().Default.CameraPort)},
+		{section: "default", key: "WFB_WEB_CAMERA_WIDTH", value: fmt.Sprint(Defaults().Default.CameraWidth)},
+		{section: "default", key: "WFB_WEB_CAMERA_HEIGHT", value: fmt.Sprint(Defaults().Default.CameraHeight)},
+		{section: "default", key: "WFB_WEB_CAMERA_FRAMERATE", value: fmt.Sprint(Defaults().Default.CameraFramerate)},
+		{section: "default", key: "WFB_WEB_CAMERA_BITRATE", value: fmt.Sprint(Defaults().Default.CameraBitrate)},
+		{section: "default", key: "WFB_WEB_CAMERA_MTU", value: fmt.Sprint(Defaults().Default.CameraMTU)},
+		{section: "default", key: "WFB_WEB_CAMERA_TEST_PATTERN", value: quoteShellString(Defaults().Default.CameraTestPattern)},
 	} {
 		id := paramID(p.section, p.key)
 		doc.order = append(doc.order, id)
@@ -443,6 +488,68 @@ func normalizeValue(value string) string {
 		}
 	}
 	return strings.Join(strings.Fields(strings.Join(lines, " ")), " ")
+}
+
+func displayParamValue(p parsedParam) string {
+	if p.section == "default" && isShellStringParam(p.key) {
+		return stringValue(p.value)
+	}
+	return p.value
+}
+
+func storeParamValue(section, key, value string) string {
+	value = strings.TrimSpace(value)
+	if section == "default" && key == "WFB_NICS" {
+		return formatWFBNics(value)
+	}
+	if section == "default" && key == "WFB_WEB_PROFILE" {
+		return formatWFBProfile(value)
+	}
+	if section == "default" && isShellStringParam(key) {
+		return quoteShellString(stringValue(value))
+	}
+	return value
+}
+
+func formatWFBNics(value string) string {
+	value = strings.TrimSpace(stringValue(value))
+	if value == "" {
+		value = Defaults().Default.WFBNics
+	}
+	if shellNeedsQuotes(value) {
+		return quoteShellString(value)
+	}
+	return value
+}
+
+func formatWFBProfile(value string) string {
+	value = strings.TrimSpace(stringValue(value))
+	if value != "gs" && value != "drone" {
+		return ""
+	}
+	return value
+}
+
+func alwaysWriteDefaultParam(key string) bool {
+	switch key {
+	case "WFB_NICS", "RTP_MTU", "RTSP_PORT", "RTSP_URI", "RTP_JITTER":
+		return true
+	default:
+		return false
+	}
+}
+
+func shellNeedsQuotes(value string) bool {
+	return strings.ContainsAny(value, " \t\n\"'$`\\#")
+}
+
+func isShellStringParam(key string) bool {
+	switch key {
+	case "WFB_NICS", "RTSP_URI", "WFB_WEB_RTSP_CODEC", "WFB_WEB_CAMERA_SOURCE", "WFB_WEB_CAMERA_DEVICE", "WFB_WEB_CAMERA_RTSP_URL", "WFB_WEB_CAMERA_CODEC", "WFB_WEB_CAMERA_HOST", "WFB_WEB_CAMERA_TEST_PATTERN":
+		return true
+	default:
+		return false
+	}
 }
 
 func isContinuationLine(line string, depth int) bool {

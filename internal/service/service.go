@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -58,9 +59,35 @@ func Run(unit, action string) error {
 	default:
 		return errors.New("unsupported service action")
 	}
+	if action == "enable" || action == "disable" {
+		args := append([]string{"systemctl", action}, enableUnits(unit)...)
+		cmd := commandWithOptionalSudo(args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return errors.New(strings.TrimSpace(string(out)) + ": " + err.Error())
+		}
+		return nil
+	}
 	cmd := exec.Command("systemctl", action, unit)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return errors.New(strings.TrimSpace(string(out)) + ": " + err.Error())
 	}
 	return nil
+}
+
+func enableUnits(unit string) []string {
+	switch strings.TrimSuffix(unit, ".service") {
+	case "wifibroadcast@gs":
+		return []string{"wifibroadcast.service", "wifibroadcast@gs.service"}
+	case "wifibroadcast@drone":
+		return []string{"wifibroadcast.service", "wifibroadcast@drone.service"}
+	default:
+		return []string{unit}
+	}
+}
+
+func commandWithOptionalSudo(args ...string) *exec.Cmd {
+	if os.Geteuid() == 0 {
+		return exec.Command(args[0], args[1:]...)
+	}
+	return exec.Command("sudo", args...)
 }

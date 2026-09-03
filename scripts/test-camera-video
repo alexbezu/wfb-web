@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+import os
+import sys
+
+try:
+    import gi
+    gi.require_version("Gst", "1.0")
+    gi.require_version("GstRtspServer", "1.0")
+    from gi.repository import GLib, Gst, GstRtspServer
+except Exception as exc:
+    print(f"GStreamer Python RTSP bindings are required: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+
+codec = os.environ.get("CODEC", "h264")
+port = os.environ.get("PORT", "8555")
+mount = os.environ.get("MOUNT", "/camera")
+width = os.environ.get("WIDTH", "1280")
+height = os.environ.get("HEIGHT", "720")
+framerate = os.environ.get("FRAMERATE", "30")
+bitrate = os.environ.get("BITRATE", "2500")
+mtu = os.environ.get("MTU", "1400")
+pattern = os.environ.get("PATTERN", "smpte")
+
+if codec == "h264":
+    encoder = f"x264enc tune=zerolatency speed-preset=ultrafast key-int-max={framerate} bitrate={bitrate}"
+    payloader = f"rtph264pay name=pay0 pt=96 config-interval=1 mtu={mtu} aggregate-mode=zero-latency"
+elif codec == "h265":
+    encoder = f"x265enc tune=zerolatency speed-preset=ultrafast key-int-max={framerate} bitrate={bitrate}"
+    payloader = f"rtph265pay name=pay0 pt=96 config-interval=1 mtu={mtu} aggregate-mode=zero-latency"
+else:
+    print(f"unsupported CODEC={codec}, expected h264 or h265", file=sys.stderr)
+    sys.exit(2)
+
+if not mount.startswith("/"):
+    print("MOUNT must start with /", file=sys.stderr)
+    sys.exit(2)
+
+Gst.init(None)
+
+pipeline = (
+    f"( videotestsrc is-live=true pattern={pattern} "
+    f"! video/x-raw,width={width},height={height},framerate={framerate}/1 "
+    f"! videoconvert "
+    f"! {encoder} "
+    f"! {payloader} )"
+)
+
+server = GstRtspServer.RTSPServer()
+server.props.service = port
+factory = GstRtspServer.RTSPMediaFactory()
+factory.set_launch(pipeline)
+factory.set_shared(True)
+server.get_mount_points().add_factory(mount, factory)
+
+if server.attach(None) == 0:
+    print("failed to attach RTSP server", file=sys.stderr)
+    sys.exit(1)
+
+print(f"Serving {codec} test camera at rtsp://127.0.0.1:{port}{mount}")
+print(f"Pipeline: {pipeline}")
+GLib.MainLoop().run()

@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+
+CODEC="${CODEC:-h265}"
+HOST="${HOST:-127.0.0.1}"
+PORT="${PORT:-5600}"
+WIDTH="${WIDTH:-1280}"
+HEIGHT="${HEIGHT:-720}"
+FRAMERATE="${FRAMERATE:-30}"
+BITRATE="${BITRATE:-2500}"
+MTU="${MTU:-1400}"
+PATTERN="${PATTERN:-smpte}"
+
+case "$CODEC" in
+  h264)
+    ENCODER="x264enc tune=zerolatency speed-preset=ultrafast key-int-max=$FRAMERATE bitrate=$BITRATE"
+    PAYLOADER="rtph264pay pt=96 config-interval=1 mtu=$MTU"
+    ;;
+  h265)
+    ENCODER="x265enc tune=zerolatency speed-preset=ultrafast key-int-max=$FRAMERATE bitrate=$BITRATE"
+    PAYLOADER="rtph265pay pt=96 config-interval=1 mtu=$MTU"
+    ;;
+  *)
+    echo "unsupported CODEC=$CODEC, expected h264 or h265" >&2
+    exit 2
+    ;;
+esac
+
+echo "Streaming $CODEC test video to udp://$HOST:$PORT"
+exec gst-launch-1.0 -v \
+  videotestsrc is-live=true pattern="$PATTERN" \
+  ! "video/x-raw,width=$WIDTH,height=$HEIGHT,framerate=$FRAMERATE/1" \
+  ! videoconvert \
+  ! $ENCODER \
+  ! $PAYLOADER \
+  ! udpsink host="$HOST" port="$PORT" sync=false async=false

@@ -26,7 +26,10 @@ var options = []Option{
 	{Profile: "drone", Label: "Drone", APIAddr: "127.0.0.1:8102"},
 }
 
-func Detect(defaultProfile string) Selection {
+func Detect(savedProfile, defaultProfile string) Selection {
+	if Allowed(savedProfile) {
+		return selection(savedProfile, "saved")
+	}
 	for _, option := range []Option{options[1], options[0]} {
 		if profile, ok := readAPIProfile(option.APIAddr); ok && Allowed(profile) {
 			return selection(profile, "json-api")
@@ -43,6 +46,10 @@ func Detect(defaultProfile string) Selection {
 
 func Manual(name string) Selection {
 	return selection(name, "manual")
+}
+
+func Saved(name string) Selection {
+	return selection(name, "saved")
 }
 
 func Allowed(name string) bool {

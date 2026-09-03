@@ -4,7 +4,13 @@ type Config = {
   common: { wifi_channel: number; wifi_region: string; link_domain: string };
   base: { ldpc: number; stbc: number; bandwidth: number; mcs_index: number; force_vht: boolean };
   gs_video: { peer: string };
-  default: { wfb_nics: string; rtp_mtu: number; rtp_jitter: number; rtsp_port: number; rtsp_uri: string };
+  default: {
+    profile: string;
+    auto_services: boolean;
+    wfb_nics: string; rtp_mtu: number; rtp_jitter: number; rtsp_port: number; rtsp_uri: string; rtsp_codec: string;
+    camera_enabled: boolean; camera_source: string; camera_device: string; camera_rtsp_url: string; camera_codec: string; camera_host: string; camera_port: number;
+    camera_width: number; camera_height: number; camera_framerate: number; camera_bitrate: number; camera_mtu: number; camera_test_pattern: string;
+  };
 };
 
 type EffectiveConfig = {
@@ -31,6 +37,29 @@ type ServiceState = {
   load: string;
   unit_file: string;
   can_reload: boolean;
+};
+
+type RTSPState = {
+  unit: string;
+  active: string;
+  sub: string;
+  options: { codec: string; mtu: number; port: number; uri: string; latency: number; rtp_port: number };
+  url: string;
+  native: boolean;
+  error?: string;
+};
+
+type CameraState = {
+  unit: string;
+  active: string;
+  sub: string;
+  options: {
+    enabled: boolean; source: string; device: string; rtsp_url: string; codec: string; host: string; port: number; width: number; height: number;
+    framerate: number; bitrate: number; mtu: number; pattern: string;
+  };
+  output: string;
+  command: string;
+  error?: string;
 };
 
 type ProfileSelection = {
@@ -107,6 +136,8 @@ let config: Config | null = null;
 let effectiveConfig: EffectiveConfig | null = null;
 let profileSelection: ProfileSelection | null = null;
 let services: ServiceState[] = [];
+let rtspState: RTSPState | null = null;
+let cameraState: CameraState | null = null;
 let radios: RadioInfo[] = [];
 let keyInfo: KeyInfo | null = null;
 let settingsEvent: WFBSettingsEvent | null = null;
@@ -120,6 +151,8 @@ let configSearch = "";
 let configSection = "all";
 let configChangedOnly = false;
 let configDrafts = new Map<string, string>();
+let copiedEndpoint = "";
+let multicastIface = "eth0";
 
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -136,6 +169,8 @@ async function load(): Promise<void> {
     effectiveConfig = await requestJSON<EffectiveConfig>("/api/config/effective");
     profileSelection = await requestJSON<ProfileSelection>("/api/profile");
     services = await requestJSON<ServiceState[]>("/api/services");
+    rtspState = await requestJSON<RTSPState>("/api/rtsp");
+    cameraState = await requestJSON<CameraState>("/api/camera");
     radios = await requestJSON<RadioInfo[]>("/api/radio");
     keyInfo = await requestJSON<KeyInfo>("/api/key");
     error = "";
@@ -252,6 +287,7 @@ function renderProfileSelect(): HTMLElement {
 function renderNav(): HTMLElement {
   const tabs = [
     ["stats", "Live Stats"],
+    ["endpoints", "Endpoints"],
     ["config", "Configuration"],
     ["key", "Key"],
     ["radio", "Radio"],
@@ -270,6 +306,8 @@ function renderNav(): HTMLElement {
 
 function renderActiveTab(): HTMLElement {
   switch (activeTab) {
+    case "endpoints":
+      return renderEndpoints();
     case "config":
       return renderConfig();
     case "key":
@@ -281,6 +319,171 @@ function renderActiveTab(): HTMLElement {
     default:
       return renderStats();
   }
+}
+
+function renderEndpoints(): HTMLElement {
+  if (!config) {
+    return el("div", { class: "panel" }, "No config loaded");
+  }
+
+  const peer = parseConnectPeer(config.gs_video.peer);
+  const rtspOptions = rtspState?.options;
+  const codec = rtspOptions?.codec === "h264" ? "h264" : "h265";
+  const gstMode = codec === "h264" ? "H264" : "H265";
+  const depay = codec === "h264" ? "rtph264depay" : "rtph265depay";
+  const rtspPort = rtspOptions?.port ?? config.default.rtsp_port;
+  const rtspURI = rtspOptions?.uri ?? config.default.rtsp_uri;
+  const rtspURL = `rtsp://${window.location.hostname || "127.0.0.1"}:${rtspPort}${rtspURI}`;
+  const endpoints = [];
+  const iface = multicastIface.trim() || "eth0";
+  const camera = cameraState?.options;
+  if (camera) {
+    const cameraMode = camera.codec === "h265" ? "H265" : "H264";
+    const cameraDepay = camera.codec === "h265" ? "rtph265depay" : "rtph264depay";
+    const cameraCaps = `application/x-rtp,media=video,clock-rate=90000,encoding-name=${cameraMode}`;
+    endpoints.push({
+      title: "Camera RTP",
+      value: `udp://${camera.host}:${camera.port}`,
+      detail: `wfb-web-camera: ${cameraState?.active ?? "unknown"}/${cameraState?.sub ?? "unknown"}, source ${camera.source}`,
+      commands: [
+        `gst-launch-1.0 -v udpsrc address=${camera.host} port=${camera.port} caps='${cameraCaps}' ! ${cameraDepay} ! decodebin ! autovideosink sync=false`,
+        `CODEC=${camera.codec} HOST=${camera.host} PORT=${camera.port} ./scripts/watch-camera-video`
+      ]
+    });
+  }
+
+  if (peer && peer.addr === "127.0.0.1") {
+    endpoints.push({
+      title: "RTSP",
+      value: rtspURL,
+      detail: nativeRTSPState(),
+      commands: [
+        `gst-launch-1.0 rtspsrc latency=0 location=${rtspURL} ! decodebin ! autovideosink sync=false`,
+        `vlc ${rtspURL}`
+      ]
+    });
+  }
+
+  if (peer) {
+    const isMulticast = isMulticastAddress(peer.addr);
+    const caps = `application/x-rtp,media=video,clock-rate=90000,encoding-name=${gstMode}`;
+    endpoints.push({
+      title: isMulticast ? "UDP Multicast" : "UDP Unicast",
+      value: `udp://${peer.addr}:${peer.port}`,
+      detail: config.gs_video.peer,
+      commands: [
+        isMulticast
+          ? `gst-launch-1.0 -v udpsrc multicast-group=${peer.addr} multicast-iface=${iface} port=${peer.port} auto-multicast=true caps='${caps}' ! ${depay} ! decodebin ! autovideosink sync=false`
+          : `gst-launch-1.0 -v udpsrc address=${peer.addr} port=${peer.port} caps='${caps}' ! ${depay} ! decodebin ! autovideosink sync=false`,
+        `vlc udp://@${isMulticast ? peer.addr : ""}:${peer.port}`
+      ]
+    });
+  }
+
+  return el("div", { class: "panel" },
+    el("div", { class: "panel-head" },
+      el("div", {},
+        el("h2", {}, "Endpoints"),
+        el("p", { class: "muted" }, `GS video peer: ${config.gs_video.peer}`)
+      ),
+      el("div", { class: "actions" },
+        el("label", { class: "compact-field" },
+          "Multicast iface",
+          el("input", {
+            value: multicastIface,
+            placeholder: "eth0",
+            onInput: (event: Event) => {
+              multicastIface = (event.target as HTMLInputElement).value;
+              render();
+            }
+          })
+        ),
+        el("button", { class: "secondary", onClick: () => void load() }, "Refresh")
+      )
+    ),
+    endpoints.length
+      ? el("div", { class: "endpoint-grid" }, ...endpoints.map(renderEndpoint))
+      : el("p", { class: "muted" }, "No connect:// video endpoint configured")
+  );
+}
+
+function renderEndpoint(endpoint: { title: string; value: string; detail: string; commands: string[] }): HTMLElement {
+  return el("section", { class: "endpoint-card" },
+    el("div", { class: "endpoint-head" },
+      el("div", {},
+        el("h3", {}, endpoint.title),
+        el("code", {}, endpoint.value),
+        el("small", {}, endpoint.detail)
+      ),
+      el("button", { class: "compact", onClick: () => void copyEndpoint(endpoint.value) }, copiedEndpoint === endpoint.value ? "Copied" : "Copy")
+    ),
+    el("div", { class: "endpoint-commands" },
+      ...endpoint.commands.map((command) =>
+        el("div", { class: "command-row" },
+          el("code", {}, command),
+          el("button", { class: "secondary compact", onClick: () => void copyEndpoint(command) }, copiedEndpoint === command ? "Copied" : "Copy")
+        )
+      )
+    )
+  );
+}
+
+async function copyEndpoint(value: string): Promise<void> {
+  try {
+    await writeClipboard(value);
+    copiedEndpoint = value;
+    render();
+    window.setTimeout(() => {
+      if (copiedEndpoint === value) {
+        copiedEndpoint = "";
+        render();
+      }
+    }, 1400);
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    render();
+  }
+}
+
+async function writeClipboard(value: string): Promise<void> {
+  if (navigator.clipboard) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.append(textarea);
+  textarea.focus();
+  textarea.select();
+  const ok = document.execCommand("copy");
+  textarea.remove();
+  if (!ok) {
+    throw new Error("copy failed");
+  }
+}
+
+function parseConnectPeer(peer: string): { addr: string; port: number } | null {
+  const match = /^connect:\/\/([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):([0-9]+)$/i.exec(peer.trim());
+  if (!match) {
+    return null;
+  }
+  return { addr: match[1], port: Number(match[2]) };
+}
+
+function isMulticastAddress(addr: string): boolean {
+  const first = Number(addr.split(".", 1)[0]);
+  return first >= 224 && first <= 239;
+}
+
+function nativeRTSPState(): string {
+  if (!rtspState) {
+    return "native RTSP: unknown";
+  }
+  const inputPort = rtspState.options.rtp_port || 5600;
+  const native = rtspState.native ? "native" : "not built";
+  return `${native} RTSP: ${rtspState.active}/${rtspState.sub}, input udp://127.0.0.1:${inputPort}`;
 }
 
 function renderServices(): HTMLElement {
@@ -304,6 +507,8 @@ function renderServices(): HTMLElement {
 
 function renderServiceRow(service: ServiceState): HTMLElement {
   const key = serviceKey(service.unit);
+  const disabledReason = serviceDisabledReason(key);
+  const disabled = disabledReason !== "";
   return el("tr", {},
     el("td", {},
       el("span", { class: `status-dot ${service.active === "active" ? "active" : ""}` }),
@@ -311,14 +516,38 @@ function renderServiceRow(service: ServiceState): HTMLElement {
     ),
     el("td", {},
       el("div", { class: "row-actions" },
-        el("button", { class: "secondary compact", onClick: () => serviceAction(key, "start") }, "Start"),
-        el("button", { class: "secondary compact", onClick: () => serviceAction(key, "stop") }, "Stop"),
-        el("button", { class: "compact", onClick: () => serviceAction(key, "restart") }, "Restart")
-      )
+        el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "start") }, "Start"),
+        el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "stop") }, "Stop"),
+        el("button", { class: "compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "restart") }, "Restart"),
+        supportsEnableDisable(key)
+          ? el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "enable") }, "Enable")
+          : "",
+        supportsEnableDisable(key)
+          ? el("button", { class: "secondary compact", disabled: String(disabled), title: disabledReason, onClick: () => serviceAction(key, "disable") }, "Disable")
+          : ""
+      ),
+      disabledReason ? el("small", { class: "muted" }, disabledReason) : ""
     ),
     el("td", {}, `${service.active}/${service.sub}`),
     el("td", {}, service.load || "-")
   );
+}
+
+function serviceDisabledReason(key: string): string {
+  const selected = profileSelection?.profile ?? "gs";
+  const gsOnly = new Set(["wifibroadcast-gs", "rtsp-h265", "rtsp-h264", "wfb-web-rtsp"]);
+  const droneOnly = new Set(["wifibroadcast-drone", "fpv-camera", "wfb-web-camera"]);
+  if (selected === "drone" && gsOnly.has(key)) {
+    return "Ground-station service disabled for drone profile";
+  }
+  if (selected === "gs" && droneOnly.has(key)) {
+    return "Drone service disabled for ground-station profile";
+  }
+  return "";
+}
+
+function supportsEnableDisable(key: string): boolean {
+  return key !== "wfb-web-rtsp" && key !== "wfb-web-camera";
 }
 
 function serviceKey(unit: string): string {
@@ -335,6 +564,10 @@ function serviceKey(unit: string): string {
     case "rtsp@h264":
     case "rtsp@h264.service":
       return "rtsp-h264";
+    case "wfb-web-rtsp":
+      return "wfb-web-rtsp";
+    case "wfb-web-camera":
+      return "wfb-web-camera";
     default:
       return "fpv-camera";
   }
@@ -370,6 +603,7 @@ function renderConfig(): HTMLElement {
 
 function renderStandardConfig(): HTMLElement {
   const standard = [
+    ["default", "WFB_WEB_PROFILE", "Saved Profile"],
     ["common", "wifi_channel", "WiFi Channel"],
     ["common", "wifi_region", "WiFi Region"],
     ["common", "wifi_txpower", "TX Power"],
@@ -381,10 +615,11 @@ function renderStandardConfig(): HTMLElement {
     ["base", "force_vht", "Force VHT"],
     ["gs_video", "peer", "GS Video Peer"],
     ["default", "WFB_NICS", "WFB NICS"],
-    ["default", "RTP_MTU", "RTP MTU"],
-    ["default", "RTP_JITTER", "RTP Jitter"],
-    ["default", "RTSP_PORT", "RTSP Port"],
-    ["default", "RTSP_URI", "RTSP URI"]
+    ["default", "WFB_WEB_RTSP_CODEC", "gs RTSP Codec"],
+    ["default", "WFB_WEB_CAMERA_ENABLED", "Camera Enabled"],
+    ["default", "WFB_WEB_CAMERA_SOURCE", "Camera Source"],
+    ["default", "WFB_WEB_CAMERA_RTSP_URL", "Camera RTSP URL"],
+    ["default", "WFB_WEB_CAMERA_CODEC", "Camera Codec"]
   ];
   return el("section", { class: "config-section" },
     el("h3", {}, "Standard"),
@@ -399,6 +634,9 @@ function renderParamControl(label: string, fieldInfo: EffectiveField | null): HT
   if (!fieldInfo) {
     return el("label", {}, label, el("input", { disabled: "true", value: "-" }));
   }
+  if (isBooleanParam(fieldInfo)) {
+    return renderBooleanParamControl(label, fieldInfo);
+  }
   const id = fieldID(fieldInfo);
   const valueNow = configDrafts.get(id) ?? fieldInfo.value;
   const attrs: Record<string, string | ((event: Event) => void)> = {
@@ -408,6 +646,23 @@ function renderParamControl(label: string, fieldInfo: EffectiveField | null): HT
   return el("label", { class: isFieldChanged(fieldInfo) ? "changed" : "" },
     label,
     el("input", attrs),
+    el("small", {}, fieldInfo.comment || `default: ${fieldInfo.default_value || "-"}`)
+  );
+}
+
+function renderBooleanParamControl(label: string, fieldInfo: EffectiveField): HTMLElement {
+  const id = fieldID(fieldInfo);
+  const valueNow = configDrafts.get(id) ?? fieldInfo.value;
+  return el("label", { class: isFieldChanged(fieldInfo) ? "changed inline-toggle" : "inline-toggle" },
+    el("input", {
+      type: "checkbox",
+      checked: String(parseBool(valueNow)),
+      onChange: (event: Event) => {
+        setConfigDraft(fieldInfo, (event.target as HTMLInputElement).checked ? "true" : "false");
+        render();
+      }
+    }),
+    label,
     el("small", {}, fieldInfo.comment || `default: ${fieldInfo.default_value || "-"}`)
   );
 }
@@ -531,6 +786,16 @@ function setConfigDraft(fieldInfo: EffectiveField, valueNow: string): void {
 function isFieldChanged(fieldInfo: EffectiveField): boolean {
   const valueNow = configDrafts.get(fieldID(fieldInfo)) ?? fieldInfo.value;
   return Boolean(fieldInfo.default_value) && normalizeParamValue(valueNow) !== normalizeParamValue(fieldInfo.default_value);
+}
+
+function isBooleanParam(fieldInfo: EffectiveField): boolean {
+  const valueNow = (configDrafts.get(fieldID(fieldInfo)) ?? fieldInfo.value).toLowerCase();
+  const defaultValue = fieldInfo.default_value.toLowerCase();
+  return ["true", "false"].includes(valueNow) || ["true", "false"].includes(defaultValue);
+}
+
+function parseBool(valueNow: string): boolean {
+  return valueNow.trim().toLowerCase() === "true";
 }
 
 function normalizeParamValue(valueNow: string): string {
