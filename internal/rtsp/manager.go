@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+const (
+	maxStartAttempts = 5
+	retryDelay       = 2 * time.Second
+	startupGrace     = 350 * time.Millisecond
+)
+
 type Options struct {
 	Codec   string `json:"codec"`
 	MTU     int    `json:"mtu"`
@@ -30,11 +36,13 @@ type State struct {
 }
 
 type Manager struct {
-	mu      sync.Mutex
-	running bool
-	opts    Options
-	lastErr string
-	done    chan struct{}
+	mu       sync.Mutex
+	running  bool
+	stopping bool
+	opts     Options
+	lastErr  string
+	stop     chan struct{}
+	done     chan struct{}
 }
 
 func NewManager() *Manager {
@@ -88,21 +96,59 @@ func (m *Manager) Start(opts Options) error {
 		return nil
 	}
 	m.running = true
+	m.stopping = false
 	m.opts = opts
 	m.lastErr = ""
+	stop := make(chan struct{})
 	done := make(chan struct{})
+	m.stop = stop
 	m.done = done
 	m.mu.Unlock()
 
 	go func() {
 		defer close(done)
-		err := runNative(opts)
+		lastErr := ""
+	retryLoop:
+		for attempt := 1; attempt <= maxStartAttempts; attempt++ {
+			if stopped(stop) {
+				break
+			}
+
+			m.mu.Lock()
+			m.lastErr = ""
+			m.mu.Unlock()
+
+			err := runNative(opts)
+			if stopped(stop) {
+				break
+			}
+			if err != nil {
+				lastErr = err.Error()
+			} else {
+				lastErr = "rtsp server exited"
+			}
+			if attempt == maxStartAttempts {
+				break
+			}
+
+			m.mu.Lock()
+			m.lastErr = fmt.Sprintf("rtsp server attempt %d/%d failed: %s; retrying in %s", attempt, maxStartAttempts, lastErr, retryDelay)
+			m.mu.Unlock()
+
+			select {
+			case <-stop:
+				break retryLoop
+			case <-time.After(retryDelay):
+			}
+		}
+
 		m.mu.Lock()
 		m.running = false
-		if err != nil {
-			m.lastErr = err.Error()
-		} else {
-			m.lastErr = "rtsp server exited"
+		m.stopping = false
+		if stopped(stop) {
+			m.lastErr = ""
+		} else if lastErr != "" {
+			m.lastErr = fmt.Sprintf("rtsp server failed after %d attempts: %s", maxStartAttempts, lastErr)
 		}
 		m.mu.Unlock()
 	}()
@@ -115,7 +161,7 @@ func (m *Manager) Start(opts Options) error {
 		if err != "" {
 			return errors.New(err)
 		}
-	case <-time.After(350 * time.Millisecond):
+	case <-time.After(startupGrace):
 	}
 	return nil
 }
@@ -123,7 +169,12 @@ func (m *Manager) Start(opts Options) error {
 func (m *Manager) Stop() error {
 	m.mu.Lock()
 	running := m.running
+	stop := m.stop
 	done := m.done
+	if running && !m.stopping {
+		close(stop)
+		m.stopping = true
+	}
 	m.mu.Unlock()
 	if !running {
 		return nil
@@ -135,6 +186,15 @@ func (m *Manager) Stop() error {
 		return errors.New("timed out waiting for rtsp server to stop")
 	}
 	return nil
+}
+
+func stopped(stop <-chan struct{}) bool {
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) Restart(opts Options) error {

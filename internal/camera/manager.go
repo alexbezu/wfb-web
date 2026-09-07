@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+const (
+	maxStartAttempts = 5
+	retryDelay       = 2 * time.Second
+	startupGrace     = 350 * time.Millisecond
+)
+
 type Options struct {
 	Enabled   bool   `json:"enabled"`
 	Source    string `json:"source"`
@@ -40,13 +46,15 @@ type State struct {
 }
 
 type Manager struct {
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	running bool
-	opts    Options
-	cmdline []string
-	lastErr string
-	done    chan struct{}
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	stop     chan struct{}
+	running  bool
+	stopping bool
+	opts     Options
+	cmdline  []string
+	lastErr  string
+	done     chan struct{}
 }
 
 func NewManager() *Manager {
@@ -97,44 +105,83 @@ func (m *Manager) Start(opts Options) error {
 		m.mu.Unlock()
 		return nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, cmdline[0], cmdline[1:]...)
-	output := &tailBuffer{limit: 64 * 1024}
-	cmd.Stdout = output
-	cmd.Stderr = output
 	done := make(chan struct{})
-	m.cancel = cancel
+	stop := make(chan struct{})
+	m.cancel = nil
+	m.stop = stop
 	m.running = true
+	m.stopping = false
 	m.opts = opts
 	m.cmdline = cmdline
 	m.lastErr = ""
 	m.done = done
 	m.mu.Unlock()
 
-	if err := cmd.Start(); err != nil {
-		m.mu.Lock()
-		m.running = false
-		m.cancel = nil
-		m.lastErr = err.Error()
-		close(done)
-		m.mu.Unlock()
-		cancel()
-		return err
-	}
-
 	go func() {
 		defer close(done)
-		err := cmd.Wait()
+		lastErr := ""
+	retryLoop:
+		for attempt := 1; attempt <= maxStartAttempts; attempt++ {
+			if stopped(stop) {
+				break
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cmd := exec.CommandContext(ctx, cmdline[0], cmdline[1:]...)
+			output := &tailBuffer{limit: 64 * 1024}
+			cmd.Stdout = output
+			cmd.Stderr = output
+
+			m.mu.Lock()
+			m.cancel = cancel
+			m.lastErr = ""
+			m.mu.Unlock()
+
+			err := cmd.Start()
+			if err == nil {
+				err = cmd.Wait()
+			}
+			ctxErr := ctx.Err()
+			cancel()
+
+			if stopped(stop) || ctxErr != nil {
+				break
+			}
+			if err == nil {
+				lastErr = "camera pipeline exited"
+			} else if cmd.ProcessState == nil {
+				lastErr = err.Error()
+			} else {
+				lastErr = commandError(err, output.String())
+			}
+			if attempt == maxStartAttempts {
+				break
+			}
+
+			m.mu.Lock()
+			m.lastErr = fmt.Sprintf("camera pipeline attempt %d/%d failed: %s; retrying in %s", attempt, maxStartAttempts, lastErr, retryDelay)
+			m.cancel = nil
+			m.mu.Unlock()
+
+			select {
+			case <-stop:
+				break retryLoop
+			case <-time.After(retryDelay):
+			}
+		}
+
 		m.mu.Lock()
 		m.running = false
 		m.cancel = nil
-		if err != nil && ctx.Err() == nil {
-			m.lastErr = commandError(err, output.String())
-		} else if err == nil && ctx.Err() == nil {
-			m.lastErr = "camera pipeline exited"
+		m.stopping = false
+		if stopped(stop) {
+			m.lastErr = ""
+		} else if lastErr != "" {
+			m.lastErr = fmt.Sprintf("camera pipeline failed after %d attempts: %s", maxStartAttempts, lastErr)
 		}
 		m.mu.Unlock()
 	}()
+
 	select {
 	case <-done:
 		m.mu.Lock()
@@ -143,7 +190,7 @@ func (m *Manager) Start(opts Options) error {
 		if err != "" {
 			return errors.New(err)
 		}
-	case <-time.After(350 * time.Millisecond):
+	case <-time.After(startupGrace):
 	}
 	return nil
 }
@@ -152,7 +199,12 @@ func (m *Manager) Stop() error {
 	m.mu.Lock()
 	running := m.running
 	cancel := m.cancel
+	stop := m.stop
 	done := m.done
+	if running && !m.stopping {
+		close(stop)
+		m.stopping = true
+	}
 	m.mu.Unlock()
 	if !running {
 		return nil
@@ -166,6 +218,15 @@ func (m *Manager) Stop() error {
 		return errors.New("timed out waiting for camera pipeline to stop")
 	}
 	return nil
+}
+
+func stopped(stop <-chan struct{}) bool {
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) Restart(opts Options) error {
